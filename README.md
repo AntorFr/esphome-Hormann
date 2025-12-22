@@ -316,5 +316,5 @@ Les contributions sont les bienvenues ! N'hésitez pas à :
 ## TODO
 
 - [ ] Support du protocole HCP2
-- [ ] Position précise de la porte (si disponible)
+- [x] ~~Position précise de la porte~~ - Non supporté par HCP1 (états binaires uniquement)
 - [ ] Intégration avec d'autres plateformes domotiques
