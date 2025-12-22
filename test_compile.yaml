@@ -1,0 +1,83 @@
+# Test configuration for Hörmann HCP1 component
+# This file is used for testing compilation
+
+esphome:
+  name: hormann-test
+  friendly_name: Hörmann Test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Disable API and OTA for simple test
+api:
+
+ota:
+  platform: esphome
+
+wifi:
+  ssid: "TestSSID"
+  password: "TestPassword"
+
+# External components - use local path
+external_components:
+  - source:
+      type: local
+      path: components
+
+# UART configuration for RS485
+uart:
+  id: uart_rs485
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 19200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+# Hörmann HCP1 component
+hormann_hcp1:
+  id: hormann
+  uart_id: uart_rs485
+  de_pin: GPIO4
+  re_pin: GPIO5
+
+# Garage door cover entity
+cover:
+  - platform: hormann_hcp1
+    id: garage_door
+    name: "Garage Door"
+    hormann_hcp1_id: hormann
+
+# Garage light
+light:
+  - platform: hormann_hcp1
+    id: garage_light
+    name: "Garage Light"
+    hormann_hcp1_id: hormann
+
+# Binary sensors
+binary_sensor:
+  - platform: hormann_hcp1
+    hormann_hcp1_id: hormann
+    light:
+      name: "Light Status"
+    error:
+      name: "Error"
+    venting:
+      name: "Venting Position"
+    prewarn:
+      name: "Pre-warning"
+
+# Action buttons
+button:
+  - platform: hormann_hcp1
+    id: impulse_button
+    name: "Impulse"
+    hormann_hcp1_id: hormann
+    action: impulse

@@ -1,0 +1,119 @@
+# ESPHome configuration for Hörmann garage door with HCP1 protocol
+# Hardware: ESP32 + HW-519 (MAX485) RS485 module
+
+esphome:
+  name: hormann-garage
+  friendly_name: Hörmann Garage Door
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Hormann-Garage Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# External components - use local path
+external_components:
+  - source:
+      type: local
+      path: components
+
+# UART configuration for RS485 communication with Hörmann door
+# Adjust pins according to your wiring
+uart:
+  id: uart_rs485
+  tx_pin: GPIO17  # Connect to RX on HW-519 (crossed!)
+  rx_pin: GPIO16  # Connect to TX on HW-519 (crossed!)
+  baud_rate: 19200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+
+# Hörmann HCP1 component
+hormann_hcp1:
+  id: hormann
+  uart_id: uart_rs485
+  # Your HW-519 module has auto-direction (only VCC/GND/TX/RX)
+  # No need for de_pin/re_pin - leave them commented out
+  # de_pin: GPIO4   # Only needed for modules with DE pin
+  # re_pin: GPIO5   # Only needed for modules with RE pin
+
+# Garage door cover entity
+cover:
+  - platform: hormann_hcp1
+    id: garage_door
+    name: "Garage Door"
+    hormann_hcp1_id: hormann
+    device_class: garage
+
+# Garage light
+light:
+  - platform: hormann_hcp1
+    id: garage_light
+    name: "Garage Light"
+    hormann_hcp1_id: hormann
+
+# Binary sensors for door status
+binary_sensor:
+  - platform: hormann_hcp1
+    hormann_hcp1_id: hormann
+    light:
+      name: "Light Status"
+      id: light_status
+    error:
+      name: "Error"
+      id: error_status
+    venting:
+      name: "Venting Position"
+      id: venting_status
+    prewarn:
+      name: "Pre-warning"
+      id: prewarn_status
+
+# Action buttons
+button:
+  - platform: hormann_hcp1
+    id: impulse_button
+    name: "Impulse"
+    hormann_hcp1_id: hormann
+    action: impulse
+    icon: "mdi:gesture-tap"
+    
+  - platform: hormann_hcp1
+    id: venting_button
+    name: "Venting Position"
+    hormann_hcp1_id: hormann
+    action: venting
+    icon: "mdi:air-filter"
+    
+  - platform: hormann_hcp1
+    id: emergency_stop_button
+    name: "Emergency Stop"
+    hormann_hcp1_id: hormann
+    action: emergency_stop
+    icon: "mdi:stop-circle"
+    entity_category: diagnostic
+
+ 
