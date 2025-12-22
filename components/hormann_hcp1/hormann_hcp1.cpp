@@ -63,6 +63,19 @@ void HormannHCP1Component::dump_config() {
 void HormannHCP1Component::loop() {
   const uint32_t now = millis();
   
+  // DEBUG: Test mode - send bytes every 500ms to blink TX LED
+  static uint32_t last_test_time = 0;
+  if (now - last_test_time > 500) {
+    last_test_time = now;
+    // Send test pattern
+    this->write_byte(0xAA);
+    this->write_byte(0x55);
+    this->write_byte(0xAA);
+    this->write_byte(0x55);
+    this->flush();
+    ESP_LOGV(TAG, "DEBUG: Test pattern sent (TX LED should blink)");
+  }
+  
   // Read available data from UART
   while (this->available() > 0) {
     uint8_t data;
