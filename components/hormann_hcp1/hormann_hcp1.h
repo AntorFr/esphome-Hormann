@@ -67,7 +67,7 @@ class HormannHCP1Component : public Component, public uart::UARTDevice {
   void setup() override;
   void loop() override;
   void dump_config() override;
-  float get_setup_priority() const override { return setup_priority::DATA; }
+  float get_setup_priority() const override { return setup_priority::BUS; }
 
   // Pin configuration for RS485 direction control
   void set_de_pin(GPIOPin *pin) { this->de_pin_ = pin; }
@@ -119,6 +119,9 @@ class HormannHCP1Component : public Component, public uart::UARTDevice {
 
   // Pending action
   HormannAction pending_action_{ACTION_NONE};
+  
+  // Debug flag
+  bool setup_done_{false};
 
   // CRC table for polynomial 0x07
   static const uint8_t crc_table_[256];

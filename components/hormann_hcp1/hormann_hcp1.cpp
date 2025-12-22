@@ -29,6 +29,7 @@ const uint8_t HormannHCP1Component::crc_table_[256] = {
 
 void HormannHCP1Component::setup() {
   ESP_LOGI(TAG, "Setting up Hörmann HCP1...");
+  this->setup_done_ = true;
   
   // Setup RS485 direction control pins
   if (this->de_pin_ != nullptr) {
@@ -50,6 +51,7 @@ void HormannHCP1Component::setup() {
 
 void HormannHCP1Component::dump_config() {
   ESP_LOGCONFIG(TAG, "Hörmann HCP1:");
+  ESP_LOGCONFIG(TAG, "  Setup was called: %s", this->setup_done_ ? "YES" : "NO");
   if (this->de_pin_ != nullptr) {
     LOG_PIN("  DE Pin: ", this->de_pin_);
   }
