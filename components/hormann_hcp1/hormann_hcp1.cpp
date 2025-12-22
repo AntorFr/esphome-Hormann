@@ -28,22 +28,24 @@ const uint8_t HormannHCP1Component::crc_table_[256] = {
 };
 
 void HormannHCP1Component::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up Hörmann HCP1...");
+  ESP_LOGI(TAG, "Setting up Hörmann HCP1...");
   
   // Setup RS485 direction control pins
   if (this->de_pin_ != nullptr) {
     this->de_pin_->setup();
     this->de_pin_->digital_write(false);  // Disable driver by default
+    ESP_LOGI(TAG, "DE pin configured");
   }
   if (this->re_pin_ != nullptr) {
     this->re_pin_->setup();
     this->re_pin_->digital_write(false);  // Enable receiver by default (active low)
+    ESP_LOGI(TAG, "RE pin configured");
   }
   
   // Start in listening mode
   start_listening();
   
-  ESP_LOGCONFIG(TAG, "Hörmann HCP1 setup complete");
+  ESP_LOGI(TAG, "Hörmann HCP1 setup complete, listening for data...");
 }
 
 void HormannHCP1Component::dump_config() {
