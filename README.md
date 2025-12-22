@@ -130,21 +130,45 @@ Le moteur Hörmann dispose d'un connecteur avec le brochage suivant :
 
 ## Installation
 
-### 1. Cloner le repository
+### Option 1 : Depuis GitHub (Recommandé)
+
+Ajoutez simplement le composant externe dans votre fichier YAML :
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/AntorFr/esphome-Hormann
+      ref: main  # ou une version spécifique comme v1.0.0
+    components: [ hormann_hcp1 ]
+```
+
+### Option 2 : Installation locale
+
+#### 1. Cloner le repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/esphome-Hormann.git
+git clone https://github.com/AntorFr/esphome-Hormann.git
 cd esphome-Hormann
 ```
 
-### 2. Configurer les secrets
+#### 2. Utiliser le chemin local
+
+```yaml
+external_components:
+  - source:
+      type: local
+      path: components
+```
+
+### Configurer les secrets
 
 ```bash
 cp secrets.yaml.example secrets.yaml
 # Éditer secrets.yaml avec vos informations WiFi
 ```
 
-### 3. Compiler et flasher
+### Compiler et flasher
 
 ```bash
 # Avec ESPHome CLI
@@ -156,13 +180,14 @@ esphome run example_hcp1.yaml
 
 ## Configuration YAML
 
-### Configuration minimale (module auto-direction)
+### Configuration minimale (depuis GitHub)
 
 ```yaml
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/AntorFr/esphome-Hormann
+    components: [ hormann_hcp1 ]
 
 uart:
   tx_pin: GPIO17
