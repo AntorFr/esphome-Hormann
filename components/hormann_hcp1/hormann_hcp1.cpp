@@ -253,6 +253,8 @@ void HormannHCP1Component::send_response() {
     return;
   }
   
+  ESP_LOGV(TAG, "TX: Preparing to send %d bytes", this->tx_length_);
+  
   stop_listening();
   start_sending();
   
@@ -260,11 +262,18 @@ void HormannHCP1Component::send_response() {
   // We approximate this by sending 0x00 with a break condition
   // For ESP32, we can use a short delay and send the data
   
+  // Log TX data
+  ESP_LOGV(TAG, "TX: [%02X %02X %02X %02X %02X %02X]", 
+           this->tx_buffer_[0], this->tx_buffer_[1], this->tx_buffer_[2],
+           this->tx_buffer_[3], this->tx_buffer_[4], this->tx_buffer_[5]);
+  
   // Write all data to UART
   for (uint8_t i = 0; i < this->tx_length_; i++) {
     this->write_byte(this->tx_buffer_[i]);
   }
   this->flush();
+  
+  ESP_LOGV(TAG, "TX: Data sent and flushed");
   
   // Small delay to ensure transmission is complete
   delayMicroseconds(600);  // ~1 byte time at 19200 baud
@@ -273,6 +282,7 @@ void HormannHCP1Component::send_response() {
   start_listening();
   
   this->tx_message_ready_ = false;
+  ESP_LOGD(TAG, "TX: Response sent successfully");
 }
 
 void HormannHCP1Component::start_listening() {
@@ -303,6 +313,15 @@ void HormannHCP1Component::stop_sending() {
 }
 
 void HormannHCP1Component::trigger_action(HormannAction action) {
+  ESP_LOGD(TAG, "trigger_action called with action=%d", (int)action);
+  
+  // DEBUG: Send a test byte to verify TX is working
+  ESP_LOGV(TAG, "DEBUG: Sending test bytes on UART...");
+  this->write_byte(0xAA);
+  this->write_byte(0x55);
+  this->flush();
+  ESP_LOGV(TAG, "DEBUG: Test bytes sent");
+  
   switch (action) {
     case ACTION_STOP:
       // Only stop if door is moving
