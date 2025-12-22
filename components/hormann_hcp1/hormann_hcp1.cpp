@@ -66,11 +66,15 @@ void HormannHCP1Component::loop() {
       break;
     }
     
+    // Debug: log every received byte
+    ESP_LOGV(TAG, "RX byte: 0x%02X (counter=%d)", data, this->rx_counter_);
+    
     // Check for framing error (sync break detection)
     // In ESP32, we detect sync break by checking for 0x00 after a pause
     if (this->rx_counter_ == -1) {
       // Waiting for sync break - look for address byte after break
       if (data == BROADCAST_ADDR || data == UAP1_ADDR) {
+        ESP_LOGD(TAG, "Start of frame detected: 0x%02X", data);
         this->rx_buffer_[0] = data;
         this->rx_counter_ = 1;
         this->rx_length_ = 0;

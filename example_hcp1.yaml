@@ -13,6 +13,9 @@ esp32:
 # Enable logging
 logger:
   level: DEBUG
+  logs:
+    hormann_hcp1: VERBOSE
+    uart: DEBUG
 
 # Enable Home Assistant API
 api:
