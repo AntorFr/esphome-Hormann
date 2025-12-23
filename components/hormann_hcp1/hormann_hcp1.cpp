@@ -73,7 +73,7 @@ void HormannHCP1Component::loop() {
     this->write_byte(0xAA);
     this->write_byte(0x55);
     this->flush();
-    ESP_LOGV(TAG, "DEBUG: Test pattern sent (TX LED should blink)");
+    ESP_LOGD(TAG, "DEBUG: TX sent 0xAA 0x55 0xAA 0x55");
   }
   
   // Read available data from UART
@@ -84,7 +84,7 @@ void HormannHCP1Component::loop() {
     }
     
     // Debug: log every received byte
-    ESP_LOGV(TAG, "RX byte: 0x%02X (counter=%d)", data, this->rx_counter_);
+    ESP_LOGD(TAG, "RX byte: 0x%02X (counter=%d)", data, this->rx_counter_);
     
     // Check for framing error (sync break detection)
     // In ESP32, we detect sync break by checking for 0x00 after a pause
