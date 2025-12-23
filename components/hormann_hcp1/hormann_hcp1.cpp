@@ -67,13 +67,13 @@ void HormannHCP1Component::loop() {
   static uint32_t last_test_time = 0;
   if (now - last_test_time > 500) {
     last_test_time = now;
-    // Send test pattern
-    this->write_byte(0xAA);
-    this->write_byte(0x55);
-    this->write_byte(0xAA);
-    this->write_byte(0x55);
-    this->flush();
-    ESP_LOGD(TAG, "DEBUG: TX sent 0xAA 0x55 0xAA 0x55");
+    // COMMENTED OUT TO TEST IF RX STILL RECEIVES DATA
+    // this->write_byte(0xAA);
+    // this->write_byte(0x55);
+    // this->write_byte(0xAA);
+    // this->write_byte(0x55);
+    // this->flush();
+    ESP_LOGD(TAG, "DEBUG: TX disabled - checking if RX still gets data");
   }
   
   // Read available data from UART
