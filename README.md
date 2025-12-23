@@ -8,9 +8,17 @@ Composant ESPHome pour contrôler les portes de garage Hörmann via le protocole
 
 ### Composants
 - **ESP32** (ESP32-DevKit, NodeMCU-32S, etc.)
-- **Module RS485 HW-519** (basé sur MAX485)
+- **Module RS485** avec contrôle DE/RE (ou EN/RTS) - voir section Hardware ci-dessous
 - Câbles Dupont
 - Alimentation 5V pour l'ESP32
+
+### ⚠️ Note importante sur les modules RS485
+
+> **Les modules RS485 "auto-direction" (HW-519 4 pins) ne semblent PAS fonctionner avec le protocole HCP1 Hörmann.**
+>
+> Le protocole HCP1 nécessite un contrôle précis du timing TX/RX et l'envoi d'un "sync break" qui requiert un changement de baud rate pendant la transmission. Les modules auto-direction ne permettent pas ce contrôle.
+>
+> **Utilisez un module avec contrôle manuel DE/RE, EN ou RTS.** (à confirmer)
 
 ### Connexion au moteur Hörmann
 
@@ -27,11 +35,13 @@ Le moteur Hörmann dispose d'un connecteur avec le brochage suivant :
 
 ## Câblage
 
-Il existe deux types de modules HW-519 :
-- **Version 4 pins** (VCC, GND, TX, RX) - Auto-direction, plus simple
-- **Version 6+ pins** (avec DE/RE) - Contrôle manuel de direction
+Il existe deux types de modules RS485 :
+- **Version 4 pins** (VCC, GND, TX, RX) - Auto-direction ⚠️ **Probablement incompatible** (à confirmer)
+- **Version avec DE/RE, EN ou RTS** - Contrôle manuel de direction ✅ **Recommandé**
 
-### Option 1 : Module HW-519 Auto-direction (4 pins - Recommandé)
+### Option 1 : Module RS485 Auto-direction (4 pins) ⚠️ Non recommandé
+
+> ⚠️ **ATTENTION** : Ces modules ne semblent pas fonctionner avec le protocole HCP1 car ils ne permettent pas le contrôle précis du timing TX/RX nécessaire. Cette section est conservée en attendant confirmation définitive.
 
 Si votre module n'a que **VCC, GND, TX, RX**, il gère automatiquement la direction RS485.
 
@@ -59,19 +69,24 @@ hormann_hcp1:
   # Pas besoin de de_pin/re_pin avec l'auto-direction
 ```
 
-### Option 2 : Module HW-519 avec contrôle DE/RE (6+ pins)
+### Option 2 : Module RS485 avec contrôle DE/RE, EN ou RTS ✅ Recommandé
 
-Si votre module a les pins **DI, RO, DE, RE**, vous devez gérer la direction manuellement.
+Si votre module a les pins **DI, RO, DE, RE** ou **TX, RX, EN/RTS**, vous devez gérer la direction manuellement.
+
+> 💡 **Modules compatibles** :
+> - MAX3485 / SP3485 avec DE/RE (3.3V natif)
+> - Modules avec pin EN (Enable) ou RTS
+> - MAX485 avec DE/RE (nécessite 5V, vérifier compatibilité 3.3V)
 
 ```
-ESP32                HW-519 (MAX485)     Hörmann Motor
+ESP32                Module RS485        Hörmann Motor
 ┌─────────┐         ┌─────────────┐     ┌─────────────┐
 │    3.3V ├─────────┤ VCC         │     │             │
 │     GND ├─────────┤ GND         │     │  Pin 3 (GND)│
-│  GPIO17 ├─────────┤ DI          │     │             │
-│  GPIO16 ├─────────┤ RO          │  A ─┤  Pin 6 (A+) │
-│   GPIO4 ├────┬────┤ DE          │  B ─┤  Pin 5 (B-) │
-│         │    └────┤ RE          │     │             │
+│  GPIO17 ├─────────┤ DI/RX       │     │             │
+│  GPIO16 ├─────────┤ RO/TX       │  A ─┤  Pin 6 (A+) │
+│   GPIO4 ├────┬────┤ DE/EN/RTS   │  B ─┤  Pin 5 (B-) │
+│         │    └────┤ RE (si présent)   │             │
 └─────────┘         └─────────────┘     └─────────────┘
 ```
 
