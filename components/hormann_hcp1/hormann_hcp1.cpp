@@ -63,17 +63,11 @@ void HormannHCP1Component::dump_config() {
 void HormannHCP1Component::loop() {
   const uint32_t now = millis();
   
-  // DEBUG: Test mode - send bytes every 500ms to blink TX LED
+  // DEBUG: Test mode - send bytes every 2s
   static uint32_t last_test_time = 0;
-  if (now - last_test_time > 500) {
+  if (now - last_test_time > 2000) {
     last_test_time = now;
-    // COMMENTED OUT TO TEST IF RX STILL RECEIVES DATA
-    // this->write_byte(0xAA);
-    // this->write_byte(0x55);
-    // this->write_byte(0xAA);
-    // this->write_byte(0x55);
-    // this->flush();
-    ESP_LOGD(TAG, "DEBUG: TX disabled - checking if RX still gets data");
+    ESP_LOGD(TAG, "DEBUG: Waiting for data from Hörmann motor...");
   }
   
   // Read available data from UART
