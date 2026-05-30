@@ -52,6 +52,23 @@ enum HormannAction {
   ACTION_IMPULSE
 };
 
+// RX line polarity handling
+// A/B differential polarity. A physical A/B swap (or a module whose A/B
+// convention is opposite to the bus) inverts BOTH directions of the single
+// differential pair, so this applies to RX and TX together.
+enum AbInvertMode : uint8_t {
+  AB_INV_OFF = 0,   // A/B as marked — no inversion
+  AB_INV_ON = 1,    // A/B swapped — invert RX and TX (RXD_INV | TXD_INV)
+  AB_INV_AUTO = 2,  // detect at boot: listen, flip RX+TX if the bus looks inverted
+};
+
+// State machine of the boot-time polarity auto-detection
+enum PolarityState : uint8_t {
+  POLARITY_LISTENING = 0,   // first window, current (non-inverted) polarity
+  POLARITY_CONFIRMING = 1,  // after a flip, verifying frames now decode
+  POLARITY_DONE = 2,        // decision made (or a forced mode is in use)
+};
+
 struct DoorState {
   CoverState cover{COVER_STOPPED};
   bool venting{false};
@@ -80,6 +97,7 @@ class HormannHCP1Component : public Component {
   void set_auto_scan(bool enable) { this->auto_scan_ = enable; }
   void set_de_invert(bool inv) { this->de_invert_ = inv; }
   void set_tx_test(bool enable) { this->tx_test_ = enable; }
+  void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
 
   DoorState get_door_state() const { return this->door_state_; }
   bool is_data_valid() const { return this->door_state_.data_valid; }
@@ -111,6 +129,15 @@ class HormannHCP1Component : public Component {
   bool de_invert_{false};
   bool tx_test_{false};
   uint32_t tx_test_last_{0};
+
+  // Line polarity / boot-time auto-detection
+  uint8_t ab_inverted_mode_{AB_INV_AUTO};   // AbInvertMode
+  bool inversion_active_{false};            // current actual RX+TX inversion state
+  uint8_t polarity_state_{POLARITY_DONE};   // PolarityState
+  uint32_t polarity_window_start_{0};
+  bool no_traffic_warned_{false};
+  volatile uint32_t rx_error_count_{0};     // breaks + frame errors in current window
+  volatile uint32_t valid_frame_count_{0};  // valid-CRC frames in current window
   uint8_t auto_scan_idx_{0};
   uint32_t auto_scan_last_change_{0};
   bool combo_locked_{false};
@@ -144,6 +171,7 @@ class HormannHCP1Component : public Component {
   void process_slave_scan(uint8_t counter);
   void process_status_request(uint8_t counter);
   void send_frame(uint8_t length);
+  void apply_line_inversion_();  // (re)apply RXD/TXD mask (TX follows RX when auto) + flush RX
 
   CallbackManager<void()> state_callback_;
 };

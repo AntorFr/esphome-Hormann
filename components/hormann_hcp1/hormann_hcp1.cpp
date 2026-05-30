@@ -80,6 +80,16 @@ void HormannHCP1Component::setup() {
   // NOTE: keeping manual DE control (no UART_MODE_RS485_HALF_DUPLEX) — the
   // automatic mode lowers RTS too early and truncates our TX on the wire.
 
+  // --- A/B line polarity -----------------------------------------------
+  // A physical A/B swap inverts RX and TX together, so we treat them as one.
+  // Forced modes apply now; 'auto' starts non-inverted and decides in loop()
+  // after listening to the bus for POLARITY_WINDOW_MS.
+  this->inversion_active_ = (this->ab_inverted_mode_ == AB_INV_ON);
+  this->polarity_state_ = (this->ab_inverted_mode_ == AB_INV_AUTO) ? POLARITY_LISTENING : POLARITY_DONE;
+  this->apply_line_inversion_();
+  this->polarity_window_start_ = millis();
+  // ---------------------------------------------------------------------
+
   // Read in batches; rely on RX timeout (~3 char times = ~1.6 ms gap) to mark end-of-frame.
   // Hörmann frames are back-to-back internally and separated by >5 ms idle.
   uart_set_rx_full_threshold(port, 1);   // notify per byte for low-latency
@@ -102,6 +112,10 @@ void HormannHCP1Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  RX pin: %d", this->rx_pin_);
   if (this->de_pin_ != nullptr) LOG_PIN("  DE pin: ", this->de_pin_);
   if (this->re_pin_ != nullptr) LOG_PIN("  RE pin: ", this->re_pin_);
+  const char *ab_mode = this->ab_inverted_mode_ == AB_INV_AUTO ? "auto"
+                        : (this->ab_inverted_mode_ == AB_INV_ON ? "true" : "false");
+  ESP_LOGCONFIG(TAG, "  A/B inverted (RX+TX): %s (active=%s)", ab_mode,
+                this->inversion_active_ ? "yes" : "no");
 }
 
 // Combinations to try when auto_scan is enabled. Order = most likely first.
@@ -123,10 +137,55 @@ static const ComboCandidate AUTO_SCAN_TABLE[] = {
 static constexpr uint8_t AUTO_SCAN_COUNT = sizeof(AUTO_SCAN_TABLE) / sizeof(AUTO_SCAN_TABLE[0]);
 static constexpr uint32_t AUTO_SCAN_INTERVAL_MS = 15000;  // 15s per combo (~3 master polls)
 
+// rx_inverted: auto — listen this long, then decide from breaks/errors vs valid frames.
+static constexpr uint32_t POLARITY_WINDOW_MS = 5000;
+static constexpr uint32_t POLARITY_ERROR_THRESHOLD = 20;  // breaks+frame-errs that look "inverted"
+
 void HormannHCP1Component::loop() {
   if (this->state_changed_) {
     this->state_changed_ = false;
     this->state_callback_.call();
+  }
+
+  // Boot-time RX polarity auto-detection (rx_inverted: auto).
+  if (this->polarity_state_ != POLARITY_DONE) {
+    uint32_t now = millis();
+    if (now - this->polarity_window_start_ >= POLARITY_WINDOW_MS) {
+      uint32_t frames = this->valid_frame_count_;
+      uint32_t errors = this->rx_error_count_;
+      if (frames > 0) {
+        ESP_LOGI(TAG, "A/B polarity OK (inverted=%s): %u valid frames in %ums",
+                 this->inversion_active_ ? "true" : "false",
+                 (unsigned) frames, (unsigned) POLARITY_WINDOW_MS);
+        this->polarity_state_ = POLARITY_DONE;
+      } else if (errors > POLARITY_ERROR_THRESHOLD) {
+        if (this->polarity_state_ == POLARITY_LISTENING && !this->inversion_active_) {
+          this->inversion_active_ = true;
+          this->apply_line_inversion_();
+          ESP_LOGW(TAG, "Bus looks A/B-INVERTED (%u breaks/errors, 0 frames) -> inverting RX+TX, confirming...",
+                   (unsigned) errors);
+          this->valid_frame_count_ = 0;
+          this->rx_error_count_ = 0;
+          this->polarity_window_start_ = now;
+          this->polarity_state_ = POLARITY_CONFIRMING;
+        } else {
+          ESP_LOGW(TAG, "Still no valid frames after inverting RX+TX (%u breaks/errors). Not a simple "
+                        "A/B inversion -> check wiring & fail-safe bias (INVESTIGATION 4quater).",
+                   (unsigned) errors);
+          this->polarity_state_ = POLARITY_DONE;
+        }
+      } else {
+        // Little/no traffic: can't decide. Keep listening (handles late bus power-up).
+        if (!this->no_traffic_warned_) {
+          ESP_LOGW(TAG, "No bus traffic yet (%u breaks/errors, 0 frames) -> waiting to auto-detect polarity",
+                   (unsigned) errors);
+          this->no_traffic_warned_ = true;
+        }
+        this->valid_frame_count_ = 0;
+        this->rx_error_count_ = 0;
+        this->polarity_window_start_ = now;
+      }
+    }
   }
 
   if (this->auto_scan_ && !this->combo_locked_) {
@@ -154,6 +213,20 @@ void HormannHCP1Component::loop() {
   }
 }
 
+// (Re)apply the UART inversion mask (RXD+TXD together — a single A/B swap
+// affects both directions) and flush stale RX captured with the previous
+// polarity. Defined outside the USE_ESP_IDF block (with an inner guard)
+// because loop() may call it on any build.
+void HormannHCP1Component::apply_line_inversion_() {
+#ifdef USE_ESP_IDF
+  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
+  uint32_t mask = this->inversion_active_ ? (UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV) : 0;
+  uart_set_line_inverse(port, mask);
+  uart_flush_input(port);
+  this->rx_counter_ = 0;
+#endif
+}
+
 #ifdef USE_ESP_IDF
 
 void HormannHCP1Component::bus_task_trampoline(void *arg) {
@@ -172,6 +245,7 @@ void HormannHCP1Component::bus_task() {
     switch (event.type) {
       case UART_BREAK:
         // Mark frame boundary: try to parse what we have so far, then reset.
+        this->rx_error_count_++;  // polarity auto-detect: breaks dominate when inverted
         try_parse_buffered();
         this->rx_counter_ = 0;
         break;
@@ -204,6 +278,7 @@ void HormannHCP1Component::bus_task() {
         break;
       case UART_FRAME_ERR:
       case UART_PARITY_ERR:
+        this->rx_error_count_++;  // polarity auto-detect: framing errors when inverted/garbled
         try_parse_buffered();
         this->rx_counter_ = 0;
         break;
@@ -230,6 +305,7 @@ void HormannHCP1Component::try_parse_buffered() {
     uint8_t total = 3 + (this->rx_buffer_[off + 1] & 0x0F);
     if (off + total > this->rx_counter_) continue;
     if (calculate_crc(this->rx_buffer_ + off, total) != 0x00) continue;
+    this->valid_frame_count_++;  // polarity auto-detect: a good frame means polarity is correct
     if (off > 0) memmove(this->rx_buffer_, this->rx_buffer_ + off, total);
     parse_message();
     return;

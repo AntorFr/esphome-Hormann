@@ -395,8 +395,13 @@ Le câblage A/B et `inverted:` (sur le rx_pin du composant uart natif, ex. witne
 4. **Repasser le SP3485 en 3,3 V** : 5 V est hors specs (VCC reco ≤ 3,6 V) et son RO sortirait à ~5 V dans une GPIO ESP 3,3 V non tolérante. À corriger pendant les tests.
 5. **Confirmer garage-3 == witness** (le retester) pour valider que c'est bien côté bus.
 
-### Conséquence pour le composant
-`inverted` n'existe pas côté **composant** : il possède le port UART en direct et n'appelle **pas** `uart_set_line_inverse`. Avec le câblage actuel (B/A) **le composant ne décodera pas** tant qu'on n'a pas ajouté `UART_SIGNAL_RXD_INV` (TODO auto-détection polarité). C'est **indépendant** du blocage idle/biais ci-dessus (lui purement électrique) : même avec RXD_INV, si l'idle est en break en sens marquage, le fail-safe reste nécessaire.
+### Auto-inverseur de polarité — IMPLÉMENTÉ (composant, 2026-05-31)
+Le composant possède le port UART en direct (pas de bloc `uart:`), donc l'astuce `inverted: true` d'ESPHome ne s'applique pas. On a implémenté à la place une option **`ab_inverted: auto | true | false`** (défaut `auto`) qui appelle `uart_set_line_inverse()` :
+- **Un seul réglage pour RX *et* TX** : un swap A/B inverse les deux sens de la même paire différentielle, donc on les traite ensemble (`RXD_INV | TXD_INV`).
+- **`auto`** : au boot, écoute 5 s ; si 0 trame valide + >20 breaks/erreurs de trame → applique l'inversion RX+TX et re-vérifie 5 s. Si ça décode → OK. Sinon → log « pas une simple inversion A/B → vérifier câblage & bias » (= le blocage idle/biais ci-dessus, électrique et **indépendant** : même inversé, si l'idle est en break en sens marquage, le fail-safe reste nécessaire).
+- **`true`/`false`** : force, désactive la détection.
+
+**Insight TX (potentiel déblocage de la commande) :** jusqu'ici on ne compensait que le RX (`inverted:true` côté witness), **pas le TX**. En câblage B/A, nos scan-replies partaient donc **inversées** → le master recevait du charabia → il ne répondait jamais au `status_request`. Coupler `TXD_INV` à `RXD_INV` est probablement **le chaînon manquant** pour débloquer la commande. À tester dès que le RX décode proprement (après fix du bias).
 
 ---
 
@@ -406,7 +411,7 @@ Par ordre coût/bénéfice :
 
 1. ~~**Alimenter le module RS485 en 5V**~~ ✅ FAIT
 2. ~~**Mesure 120 Ω au multimètre**~~ ✅ FAIT — ajouté
-3. **`uart_set_line_inverse(port, UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV)`** dans le composant — RX déjà confirmé nécessaire, TXD_INV à tester pour que le master décode nos scan-replies.
+3. ~~**`uart_set_line_inverse(RXD_INV | TXD_INV)`** dans le composant~~ ✅ FAIT — implémenté comme option `ab_inverted: auto|true|false` (RX+TX couplés, auto-détection au boot, cf. §4quater). Reste à valider sur le matériel une fois le bias réglé.
 4. **Tester si le master répond au scan-reply** avec la correction TX — c'est l'objectif principal depuis le début.
 5. **`master_addr: 0x90`** — jamais testé, valide sur certains modèles (HAP1-HCP-Adapter selon hgdo). À essayer si le scan-reply reste ignoré.
 6. **Capture Saleae traces** ([blog.bouni.de](https://blog.bouni.de/posts/2018/hoerrmann-uap1/logic-traces.zip)) — timing exact d'un vrai UAP1.

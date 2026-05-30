@@ -18,6 +18,7 @@ CONF_SLAVE_TYPE = 'slave_type'
 CONF_AUTO_SCAN = 'auto_scan'
 CONF_DE_INVERT = 'de_invert'
 CONF_TX_TEST = 'tx_test'
+CONF_AB_INVERTED = 'ab_inverted'
 
 hormann_hcp1_ns = cg.esphome_ns.namespace('hormann_hcp1')
 HormannHCP1Component = hormann_hcp1_ns.class_('HormannHCP1Component', cg.Component)
@@ -35,6 +36,9 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_AUTO_SCAN, default=False): cv.boolean,
     cv.Optional(CONF_DE_INVERT, default=False): cv.boolean,
     cv.Optional(CONF_TX_TEST, default=False): cv.boolean,
+    # A/B polarity (applies to RX and TX together — one differential pair):
+    # false/true to force, or 'auto' to detect at boot (default).
+    cv.Optional(CONF_AB_INVERTED, default='auto'): cv.Any(cv.boolean, cv.one_of('auto', lower=True)),
 }).extend(cv.COMPONENT_SCHEMA)
 
 
@@ -51,6 +55,11 @@ async def to_code(config):
     cg.add(var.set_auto_scan(config[CONF_AUTO_SCAN]))
     cg.add(var.set_de_invert(config[CONF_DE_INVERT]))
     cg.add(var.set_tx_test(config[CONF_TX_TEST]))
+
+    # ab_inverted: 0 = off, 1 = on, 2 = auto-detect (applies to RX and TX)
+    ab_inv = config[CONF_AB_INVERTED]
+    ab_inv_mode = 2 if ab_inv == 'auto' else (1 if ab_inv else 0)
+    cg.add(var.set_ab_inverted_mode(ab_inv_mode))
 
     if CONF_DE_PIN in config:
         de_pin = await cg.gpio_pin_expression(config[CONF_DE_PIN])

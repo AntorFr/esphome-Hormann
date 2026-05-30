@@ -204,14 +204,14 @@ external_components:
       url: https://github.com/AntorFr/esphome-Hormann
     components: [ hormann_hcp1 ]
 
-uart:
-  tx_pin: GPIO17
-  rx_pin: GPIO16
-  baud_rate: 19200
-
+# Pas de bloc `uart:` — le composant pilote le port UART directement (ESP-IDF natif).
 hormann_hcp1:
   id: hormann
-  # de_pin et re_pin optionnels si module auto-direction
+  uart_num: 1
+  tx_pin: 17         # -> DI/RX du module RS485
+  rx_pin: 16         # -> RO/TX du module RS485
+  de_pin: GPIO4      # EN ou DE (optionnel selon module)
+  ab_inverted: auto  # auto-détection de la polarité A/B (RX+TX)
 
 cover:
   - platform: hormann_hcp1
@@ -224,9 +224,29 @@ cover:
 ```yaml
 hormann_hcp1:
   id: hormann
+  uart_num: 1
+  tx_pin: 17
+  rx_pin: 16
   de_pin: GPIO4
-  re_pin: GPIO5  # Peut être le même que de_pin si pontés
+  re_pin: GPIO5      # ou le même pin que de_pin si pontés (EN)
+  ab_inverted: auto
 ```
+
+### Polarité A/B (inversion RS485)
+
+Selon le module RS485 et le câblage, la paire A/B peut être inversée par rapport au bus Hörmann. Comme A et B forment **une seule paire différentielle**, une inversion affecte **RX et TX ensemble** — le composant les traite donc d'un seul réglage :
+
+```yaml
+hormann_hcp1:
+  id: hormann
+  ab_inverted: auto   # auto (défaut) | true | false
+```
+
+- **`auto`** (défaut) : au démarrage, le composant écoute le bus ~5 s. S'il ne décode aucune trame valide mais voit beaucoup de breaks/erreurs de trame, il inverse automatiquement RX **et** TX (`RXD_INV | TXD_INV`) puis re-vérifie. La décision est journalisée.
+- **`true`** : force l'inversion RX+TX (A/B câblés à l'envers du marquage du module).
+- **`false`** : aucune inversion.
+
+> 💡 Si après inversion automatique il n'y a toujours aucune trame, ce n'est **pas** une simple inversion A/B : vérifier le câblage et surtout la **polarisation fail-safe** du bus (résistances de bias), en particulier si une terminaison 120 Ω est présente.
 
 ### Configuration complète
 
@@ -283,7 +303,7 @@ Le composant émule un module UAP1 Hörmann pour communiquer avec le moteur.
 ## Dépannage
 
 ### La porte ne répond pas
-1. Vérifier le câblage RS485 (A/B peuvent être inversés)
+1. Vérifier le câblage RS485 — A/B peuvent être inversés. Le composant tente une **auto-détection** (`ab_inverted: auto`). Si rien n'est décodé même après inversion auto, suspecter la **polarisation fail-safe** du bus (bias) plutôt que la simple polarité.
 2. Vérifier que le GND est connecté
 3. Activer le mode DEBUG dans les logs ESPHome
 

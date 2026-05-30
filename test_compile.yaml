@@ -39,6 +39,7 @@ hormann_hcp1:
   rx_pin: 16
   de_pin: GPIO4
   re_pin: GPIO5
+  ab_inverted: auto   # off | true | auto — A/B polarity for RX+TX (boot-time detection)
 
 # Garage door cover entity
 cover:
