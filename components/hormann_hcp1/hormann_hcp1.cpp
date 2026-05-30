@@ -1,13 +1,16 @@
 #include "hormann_hcp1.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
+#ifdef USE_ESP_IDF
+#include "esp_rom_sys.h"
+#include "esp_timer.h"
+#endif
 
 namespace esphome {
 namespace hormann_hcp1 {
 
 static const char *const TAG = "hormann_hcp1";
 
-// CRC table for polynomial 0x07 with initial value 0xF3
 const uint8_t HormannHCP1Component::crc_table_[256] = {
   0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
   0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D,
@@ -27,110 +30,6 @@ const uint8_t HormannHCP1Component::crc_table_[256] = {
   0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3
 };
 
-void HormannHCP1Component::setup() {
-  ESP_LOGI(TAG, "Setting up Hörmann HCP1...");
-  this->setup_done_ = true;
-  
-  // Setup RS485 direction control pins
-  if (this->de_pin_ != nullptr) {
-    this->de_pin_->setup();
-    this->de_pin_->digital_write(false);  // Disable driver by default
-    ESP_LOGI(TAG, "DE pin configured");
-  }
-  if (this->re_pin_ != nullptr) {
-    this->re_pin_->setup();
-    this->re_pin_->digital_write(false);  // Enable receiver by default (active low)
-    ESP_LOGI(TAG, "RE pin configured");
-  }
-  
-  // Start in listening mode
-  start_listening();
-  
-  ESP_LOGI(TAG, "Hörmann HCP1 setup complete, listening for data...");
-}
-
-void HormannHCP1Component::dump_config() {
-  ESP_LOGCONFIG(TAG, "Hörmann HCP1:");
-  ESP_LOGCONFIG(TAG, "  Setup was called: %s", this->setup_done_ ? "YES" : "NO");
-  if (this->de_pin_ != nullptr) {
-    LOG_PIN("  DE Pin: ", this->de_pin_);
-  }
-  if (this->re_pin_ != nullptr) {
-    LOG_PIN("  RE Pin: ", this->re_pin_);
-  }
-}
-
-void HormannHCP1Component::loop() {
-  const uint32_t now = millis();
-  
-  // Read available data from UART
-  while (this->available() > 0) {
-    uint8_t data;
-    if (!this->read_byte(&data)) {
-      break;
-    }
-    
-    // Debug: log every received byte
-    ESP_LOGD(TAG, "RX byte: 0x%02X (counter=%d)", data, this->rx_counter_);
-    
-    // Check for framing error (sync break detection)
-    // In ESP32, we detect sync break by checking for 0x00 after a pause
-    if (this->rx_counter_ == -1) {
-      // Waiting for sync break - look for address byte after break
-      if (data == BROADCAST_ADDR || data == UAP1_ADDR) {
-        ESP_LOGD(TAG, "Start of frame detected: 0x%02X", data);
-        this->rx_buffer_[0] = data;
-        this->rx_counter_ = 1;
-        this->rx_length_ = 0;
-      }
-    } else if (this->rx_counter_ >= 0) {
-      this->rx_buffer_[this->rx_counter_] = data;
-      this->rx_counter_++;
-      
-      // Second byte contains counter (4 bits) and length (4 bits)
-      if (this->rx_counter_ == 2) {
-        this->rx_length_ = (data & 0x0F);
-        if (this->rx_length_ > 15) {
-          // Invalid length, reset
-          this->rx_counter_ = -1;
-        }
-      }
-      
-      // Check if we have received the complete message
-      // Message format: [addr][counter+len][data...][crc]
-      // Total length = 1 (addr) + 1 (counter+len) + length (data) + 1 (crc) = length + 3
-      if (this->rx_counter_ > 2 && this->rx_counter_ == (this->rx_length_ + 3)) {
-        // Verify CRC
-        uint8_t calculated_crc = calculate_crc(this->rx_buffer_, this->rx_length_ + 2);
-        if (calculated_crc == this->rx_buffer_[this->rx_length_ + 2]) {
-          this->rx_message_ready_ = true;
-          this->last_message_time_ = now;
-        }
-        this->rx_counter_ = -1;
-      }
-    }
-  }
-  
-  // Process received message
-  if (this->rx_message_ready_) {
-    parse_message();
-    this->rx_message_ready_ = false;
-  }
-  
-  // Handle response delay (3ms after receiving a message addressed to us)
-  if (this->delay_counter_ > 0) {
-    this->delay_counter_--;
-    if (this->delay_counter_ == 0 && this->tx_message_ready_) {
-      send_response();
-    }
-  }
-  
-  // Timeout for partial messages
-  if (this->rx_counter_ >= 0 && (now - this->last_message_time_ > 100)) {
-    this->rx_counter_ = -1;
-  }
-}
-
 uint8_t HormannHCP1Component::calculate_crc(const uint8_t *data, uint8_t length) {
   uint8_t crc = CRC8_INITIAL_VALUE;
   for (uint8_t i = 0; i < length; i++) {
@@ -139,225 +38,350 @@ uint8_t HormannHCP1Component::calculate_crc(const uint8_t *data, uint8_t length)
   return crc;
 }
 
+void HormannHCP1Component::setup() {
+  ESP_LOGI(TAG, "Setting up Hörmann HCP1 (ESP-IDF native UART%u)...", this->uart_num_);
+
+  if (this->de_pin_ != nullptr) {
+    this->de_pin_->setup();
+    this->de_pin_->digital_write(this->de_invert_);  // start in RX mode
+  }
+  if (this->re_pin_ != nullptr) {
+    this->re_pin_->setup();
+    this->re_pin_->digital_write(false);  // active low: enable receiver
+  }
+
+#ifdef USE_ESP_IDF
+  uart_config_t uart_cfg = {};
+  uart_cfg.baud_rate = 19200;
+  uart_cfg.data_bits = UART_DATA_8_BITS;
+  uart_cfg.parity = UART_PARITY_DISABLE;
+  uart_cfg.stop_bits = UART_STOP_BITS_1;
+  uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+  uart_cfg.source_clk = UART_SCLK_DEFAULT;
+
+  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
+
+  // RX buffer 256, TX buffer 256, queue depth 20
+  esp_err_t err = uart_driver_install(port, 512, 256, 40, &this->uart_queue_, 0);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "uart_driver_install failed: %d", err);
+    this->mark_failed();
+    return;
+  }
+  uart_param_config(port, &uart_cfg);
+  // If de_pin is provided, wire it as the RTS pin and let ESP-IDF drive it
+  // automatically in RS485 half-duplex mode (precise timing, no truncated bits).
+  int rts = UART_PIN_NO_CHANGE;
+  if (this->de_pin_ != nullptr) {
+    auto *internal = static_cast<InternalGPIOPin *>(this->de_pin_);
+    rts = internal->get_pin();
+  }
+  uart_set_pin(port, this->tx_pin_, this->rx_pin_, rts, UART_PIN_NO_CHANGE);
+  // NOTE: keeping manual DE control (no UART_MODE_RS485_HALF_DUPLEX) — the
+  // automatic mode lowers RTS too early and truncates our TX on the wire.
+
+  // Read in batches; rely on RX timeout (~3 char times = ~1.6 ms gap) to mark end-of-frame.
+  // Hörmann frames are back-to-back internally and separated by >5 ms idle.
+  uart_set_rx_full_threshold(port, 1);   // notify per byte for low-latency
+  uart_set_rx_timeout(port, 1);          // ~0.5 ms gap = end of frame
+
+  xTaskCreatePinnedToCore(&HormannHCP1Component::bus_task_trampoline, "hcp1_bus",
+                          4096, this, 23, &this->bus_task_, 1);
+
+  ESP_LOGI(TAG, "Hörmann HCP1 ready (TX=%d RX=%d)", this->tx_pin_, this->rx_pin_);
+#else
+  ESP_LOGE(TAG, "hormann_hcp1 requires the esp-idf framework");
+  this->mark_failed();
+#endif
+}
+
+void HormannHCP1Component::dump_config() {
+  ESP_LOGCONFIG(TAG, "Hörmann HCP1:");
+  ESP_LOGCONFIG(TAG, "  UART num: %u", this->uart_num_);
+  ESP_LOGCONFIG(TAG, "  TX pin: %d", this->tx_pin_);
+  ESP_LOGCONFIG(TAG, "  RX pin: %d", this->rx_pin_);
+  if (this->de_pin_ != nullptr) LOG_PIN("  DE pin: ", this->de_pin_);
+  if (this->re_pin_ != nullptr) LOG_PIN("  RE pin: ", this->re_pin_);
+}
+
+// Combinations to try when auto_scan is enabled. Order = most likely first.
+struct ComboCandidate { uint8_t slave; uint8_t master; uint8_t type; };
+static const ComboCandidate AUTO_SCAN_TABLE[] = {
+  {0x28, 0x80, 0x14},  // default UAP1
+  {0x29, 0x80, 0x14},
+  {0x82, 0x80, 0x14},  // intelligent controller range
+  {0x83, 0x80, 0x14},
+  {0x81, 0x80, 0x14},
+  {0x28, 0x8D, 0x14},  // master_device variant
+  {0x82, 0x8D, 0x14},
+  {0x28, 0x80, 0x10},  // alternate type codes
+  {0x28, 0x80, 0x12},
+  {0x28, 0x80, 0x15},
+  {0x28, 0x80, 0x16},
+  {0x28, 0x80, 0x20},
+};
+static constexpr uint8_t AUTO_SCAN_COUNT = sizeof(AUTO_SCAN_TABLE) / sizeof(AUTO_SCAN_TABLE[0]);
+static constexpr uint32_t AUTO_SCAN_INTERVAL_MS = 15000;  // 15s per combo (~3 master polls)
+
+void HormannHCP1Component::loop() {
+  if (this->state_changed_) {
+    this->state_changed_ = false;
+    this->state_callback_.call();
+  }
+
+  if (this->auto_scan_ && !this->combo_locked_) {
+    uint32_t now = millis();
+    if (this->auto_scan_last_change_ == 0 ||
+        now - this->auto_scan_last_change_ > AUTO_SCAN_INTERVAL_MS) {
+      this->auto_scan_last_change_ = now;
+      const auto &c = AUTO_SCAN_TABLE[this->auto_scan_idx_];
+      this->slave_addr_ = c.slave;
+      this->master_addr_ = c.master;
+      this->slave_type_ = c.type;
+      ESP_LOGW(TAG, "AUTO-SCAN [%u/%u]: slave=0x%02X master=0x%02X type=0x%02X",
+               this->auto_scan_idx_ + 1, AUTO_SCAN_COUNT,
+               this->slave_addr_, this->master_addr_, this->slave_type_);
+      this->auto_scan_idx_ = (this->auto_scan_idx_ + 1) % AUTO_SCAN_COUNT;
+    }
+  }
+
+  if (this->tx_test_) {
+    uint32_t now = millis();
+    if (this->tx_test_last_ == 0 || now - this->tx_test_last_ > 2000) {
+      this->tx_test_last_ = now;
+      this->tx_diag();
+    }
+  }
+}
+
+#ifdef USE_ESP_IDF
+
+void HormannHCP1Component::bus_task_trampoline(void *arg) {
+  static_cast<HormannHCP1Component *>(arg)->bus_task();
+}
+
+void HormannHCP1Component::bus_task() {
+  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
+  uart_event_t event;
+  uint8_t buf[64];
+
+  for (;;) {
+    if (xQueueReceive(this->uart_queue_, &event, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+    switch (event.type) {
+      case UART_BREAK:
+        // Mark frame boundary: try to parse what we have so far, then reset.
+        try_parse_buffered();
+        this->rx_counter_ = 0;
+        break;
+      case UART_DATA: {
+        int len = uart_read_bytes(port, buf, std::min<int>(event.size, sizeof(buf)), 0);
+        // Log raw bytes like witness uart_debug (same format for easy comparison).
+        if (len > 0) {
+          char hexbuf[256]; int pos = 0;
+          for (int i = 0; i < len && pos < 250; i++)
+            pos += snprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X:", buf[i]);
+          if (pos > 0) hexbuf[pos - 1] = '\0';
+          ESP_LOGD(TAG, "<<< %s", hexbuf);
+        }
+        for (int i = 0; i < len && this->rx_counter_ < sizeof(this->rx_buffer_); i++) {
+          this->rx_buffer_[this->rx_counter_++] = buf[i];
+        }
+        if (event.timeout_flag) {
+          // Inter-frame gap detected -> frame is complete
+          try_parse_buffered();
+          this->rx_counter_ = 0;
+        }
+        break;
+      }
+      case UART_FIFO_OVF:
+      case UART_BUFFER_FULL:
+        ESP_LOGW(TAG, "UART overflow, flushing");
+        uart_flush_input(port);
+        xQueueReset(this->uart_queue_);
+        this->rx_counter_ = 0;
+        break;
+      case UART_FRAME_ERR:
+      case UART_PARITY_ERR:
+        try_parse_buffered();
+        this->rx_counter_ = 0;
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+// Scan the rolling RX buffer for a valid Hörmann frame.
+// A valid frame: [addr ∈ {0x00, 0x28, 0x80}][cnt|len][payload...][crc]
+// where total length = 3 + (cnt|len & 0x0F) and CRC over the whole frame == 0x00.
+void HormannHCP1Component::try_parse_buffered() {
+  if (this->rx_counter_ < 4) return;
+  // Log raw RX bytes at DEBUG level to diagnose polarity/framing issues.
+  char hexbuf[128]; int pos = 0;
+  for (uint8_t i = 0; i < this->rx_counter_ && pos < 120; i++)
+    pos += snprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X:", this->rx_buffer_[i]);
+  if (pos > 0) hexbuf[pos - 1] = '\0';
+  ESP_LOGD(TAG, "RX[%u]: %s", this->rx_counter_, hexbuf);
+  for (uint8_t off = 0; off + 4 <= this->rx_counter_; off++) {
+    uint8_t addr = this->rx_buffer_[off];
+    if (addr != BROADCAST_ADDR && addr != this->slave_addr_ && addr != this->master_addr_) continue;
+    uint8_t total = 3 + (this->rx_buffer_[off + 1] & 0x0F);
+    if (off + total > this->rx_counter_) continue;
+    if (calculate_crc(this->rx_buffer_ + off, total) != 0x00) continue;
+    if (off > 0) memmove(this->rx_buffer_, this->rx_buffer_ + off, total);
+    parse_message();
+    return;
+  }
+}
+
 void HormannHCP1Component::parse_message() {
   uint8_t address = this->rx_buffer_[0];
   uint8_t length = this->rx_buffer_[1] & 0x0F;
-  uint8_t counter = (this->rx_buffer_[1] & 0xF0) + 0x10;  // Increment counter for response
-  
+  uint8_t counter = (this->rx_buffer_[1] & 0xF0) + 0x10;
+
   if (address == BROADCAST_ADDR) {
-    // Broadcast message from master
-    process_broadcast(length);
-  } else if (address == UAP1_ADDR) {
-    // Message addressed to us (UAP1)
+    if (length == 0x02) process_broadcast(length);
+  } else if (address == this->slave_addr_) {
     if (length == 0x02 && this->rx_buffer_[2] == CMD_SLAVE_SCAN) {
-      // Slave scan command
       process_slave_scan(counter);
     } else if (length == 0x01 && this->rx_buffer_[2] == CMD_SLAVE_STATUS_REQUEST) {
-      // Status request command
       process_status_request(counter);
     }
   }
 }
 
 void HormannHCP1Component::process_broadcast(uint8_t length) {
-  if (length == 0x02) {
-    // Store broadcast status
-    this->broadcast_status_ = this->rx_buffer_[2];
-    this->broadcast_status_ |= (uint16_t)this->rx_buffer_[3] << 8;
-    
-    DoorState old_state = this->door_state_;
-    
-    // Parse door state from broadcast
-    uint8_t d0 = this->rx_buffer_[2];
-    uint8_t d1 = this->rx_buffer_[3];
-    
-    // Determine cover state
-    if (d0 & 0x01) {
-      this->door_state_.cover = COVER_OPEN;
-    } else if (d0 & 0x02) {
-      this->door_state_.cover = COVER_CLOSED;
-    } else if ((d0 & 0x60) == 0x40) {
-      this->door_state_.cover = COVER_OPENING;
-    } else if ((d0 & 0x60) == 0x60) {
-      this->door_state_.cover = COVER_CLOSING;
-    } else {
-      this->door_state_.cover = COVER_STOPPED;
-    }
-    
-    // Other states
-    this->door_state_.option_relay = (d0 & 0x04) != 0;
-    this->door_state_.light = (d0 & 0x08) != 0;
-    this->door_state_.error = (d0 & 0x10) != 0;
-    this->door_state_.venting = (d0 & 0x80) != 0;
-    this->door_state_.prewarn = (d1 & 0x01) != 0;
-    this->door_state_.data_valid = true;
-    
-    // Log state changes
-    if (old_state.cover != this->door_state_.cover || !old_state.data_valid) {
-      const char *state_str;
-      switch (this->door_state_.cover) {
-        case COVER_OPEN: state_str = "OPEN"; break;
-        case COVER_CLOSED: state_str = "CLOSED"; break;
-        case COVER_OPENING: state_str = "OPENING"; break;
-        case COVER_CLOSING: state_str = "CLOSING"; break;
-        default: state_str = "STOPPED"; break;
-      }
-      ESP_LOGI(TAG, "Door state: %s", state_str);
-    }
-    
-    // Notify callbacks
-    this->state_callback_.call();
+  this->broadcast_status_ = this->rx_buffer_[2] | ((uint16_t) this->rx_buffer_[3] << 8);
+  uint8_t d0 = this->rx_buffer_[2];
+  uint8_t d1 = this->rx_buffer_[3];
+
+  DoorState prev = this->door_state_;
+
+  if (d0 & 0x01) this->door_state_.cover = COVER_OPEN;
+  else if (d0 & 0x02) this->door_state_.cover = COVER_CLOSED;
+  else if ((d0 & 0x60) == 0x40) this->door_state_.cover = COVER_OPENING;
+  else if ((d0 & 0x60) == 0x60) this->door_state_.cover = COVER_CLOSING;
+  else this->door_state_.cover = COVER_STOPPED;
+
+  this->door_state_.option_relay = (d0 & 0x04) != 0;
+  this->door_state_.light = (d0 & 0x08) != 0;
+  this->door_state_.error = (d0 & 0x10) != 0;
+  this->door_state_.venting = (d0 & 0x80) != 0;
+  this->door_state_.prewarn = (d1 & 0x01) != 0;
+  this->door_state_.data_valid = true;
+
+  bool changed = prev.cover != this->door_state_.cover ||
+                 prev.light != this->door_state_.light ||
+                 prev.error != this->door_state_.error ||
+                 prev.venting != this->door_state_.venting ||
+                 prev.prewarn != this->door_state_.prewarn ||
+                 prev.option_relay != this->door_state_.option_relay ||
+                 !prev.data_valid;
+  if (changed) {
+    ESP_LOGI(TAG, "Door state: cover=%d light=%d err=%d vent=%d",
+             (int) this->door_state_.cover, this->door_state_.light,
+             this->door_state_.error, this->door_state_.venting);
+    this->state_changed_ = true;
   }
 }
 
 void HormannHCP1Component::process_slave_scan(uint8_t counter) {
-  // Check if scan is from master (0x80)
-  if (this->rx_buffer_[3] != MASTER_ADDR) {
-    return;
-  }
-  
-  ESP_LOGD(TAG, "Received slave scan, responding...");
-  
-  // Prepare scan response
-  this->tx_buffer_[0] = MASTER_ADDR;
+  this->tx_buffer_[0] = this->master_addr_;
   this->tx_buffer_[1] = 0x02 | counter;
-  this->tx_buffer_[2] = UAP1_TYPE;
-  this->tx_buffer_[3] = UAP1_ADDR;
+  this->tx_buffer_[2] = this->slave_type_;
+  this->tx_buffer_[3] = this->slave_addr_;
   this->tx_buffer_[4] = calculate_crc(this->tx_buffer_, 4);
-  this->tx_length_ = 5;
-  this->tx_message_ready_ = true;
-  this->delay_counter_ = 3;  // 3ms delay before responding
+  send_frame(5);
 }
 
 void HormannHCP1Component::process_status_request(uint8_t counter) {
-  ESP_LOGD(TAG, "Received status request, responding with 0x%04X", this->slave_response_data_);
-  
-  // Prepare status response
-  this->tx_buffer_[0] = MASTER_ADDR;
+  if (this->auto_scan_ && !this->combo_locked_) {
+    this->combo_locked_ = true;
+    ESP_LOGW(TAG, "*** WORKING COMBO: slave=0x%02X master=0x%02X type=0x%02X ***",
+             this->slave_addr_, this->master_addr_, this->slave_type_);
+  }
+  this->tx_buffer_[0] = this->master_addr_;
   this->tx_buffer_[1] = 0x03 | counter;
   this->tx_buffer_[2] = CMD_SLAVE_STATUS_RESPONSE;
-  this->tx_buffer_[3] = (uint8_t)this->slave_response_data_;
-  this->tx_buffer_[4] = (uint8_t)(this->slave_response_data_ >> 8);
-  
-  // Reset response to default after sending
+  this->tx_buffer_[3] = (uint8_t) this->slave_response_data_;
+  this->tx_buffer_[4] = (uint8_t) (this->slave_response_data_ >> 8);
   this->slave_response_data_ = RESPONSE_DEFAULT;
-  
   this->tx_buffer_[5] = calculate_crc(this->tx_buffer_, 5);
-  this->tx_length_ = 6;
-  this->tx_message_ready_ = true;
-  this->delay_counter_ = 3;  // 3ms delay before responding
+  send_frame(6);
 }
 
-void HormannHCP1Component::send_response() {
-  if (!this->tx_message_ready_) {
-    return;
-  }
-  
-  ESP_LOGV(TAG, "TX: Preparing to send %d bytes", this->tx_length_);
-  
-  stop_listening();
-  start_sending();
-  
-  // Send sync break (all zeros for ~400µs at 19200 baud = ~7-8 bits)
-  // We approximate this by sending 0x00 with a break condition
-  // For ESP32, we can use a short delay and send the data
-  
-  // Log TX data
-  ESP_LOGV(TAG, "TX: [%02X %02X %02X %02X %02X %02X]", 
-           this->tx_buffer_[0], this->tx_buffer_[1], this->tx_buffer_[2],
-           this->tx_buffer_[3], this->tx_buffer_[4], this->tx_buffer_[5]);
-  
-  // Write all data to UART
-  for (uint8_t i = 0; i < this->tx_length_; i++) {
-    this->write_byte(this->tx_buffer_[i]);
-  }
-  this->flush();
-  
-  ESP_LOGV(TAG, "TX: Data sent and flushed");
-  
-  // Small delay to ensure transmission is complete
-  delayMicroseconds(600);  // ~1 byte time at 19200 baud
-  
-  stop_sending();
-  start_listening();
-  
-  this->tx_message_ready_ = false;
-  ESP_LOGD(TAG, "TX: Response sent successfully");
-}
+void HormannHCP1Component::send_frame(uint8_t length) {
+#ifdef USE_ESP_IDF
+  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
 
-void HormannHCP1Component::start_listening() {
-  if (this->de_pin_ != nullptr) {
-    this->de_pin_->digital_write(false);  // Disable driver
-  }
-  if (this->re_pin_ != nullptr) {
-    this->re_pin_->digital_write(false);  // Enable receiver (active low)
-  }
-}
+  int64_t t0 = esp_timer_get_time();
 
-void HormannHCP1Component::stop_listening() {
-  if (this->re_pin_ != nullptr) {
-    this->re_pin_->digital_write(true);  // Disable receiver (active low)
-  }
-}
+  // Manual DE control — raise BEFORE writing.
+  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(true);
+  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(!this->de_invert_);
+  esp_rom_delay_us(20);  // allow the line to settle
 
-void HormannHCP1Component::start_sending() {
-  if (this->de_pin_ != nullptr) {
-    this->de_pin_->digital_write(true);  // Enable driver
-  }
-}
+  // Fast leading "break": prepend a 0x00 byte at 19200 8N1 = 1 start + 8 data low + 1 stop
+  // = ~470 µs low which most HCP masters accept as sync break (~12 bit-times).
+  // No baud-switch (which would cost ~40 ms via uart_set_baudrate).
+  uint8_t framed[20];
+  framed[0] = 0x00;
+  for (uint8_t i = 0; i < length; i++) framed[i + 1] = this->tx_buffer_[i];
+  uart_write_bytes(port, framed, length + 1);
+  uart_wait_tx_done(port, pdMS_TO_TICKS(20));
+  // wait_tx_done returns when the FIFO is empty, but the shift register may still
+  // be clocking out the last byte. Hold DE for an extra full byte time (~520 µs)
+  // before releasing, otherwise the last bits get truncated on the wire.
+  esp_rom_delay_us(600);
 
-void HormannHCP1Component::stop_sending() {
-  if (this->de_pin_ != nullptr) {
-    this->de_pin_->digital_write(false);  // Disable driver
-  }
+  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(this->de_invert_);
+  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(false);
+  int64_t t1 = esp_timer_get_time();
+  ESP_LOGW(TAG, "TX took %lldus", (long long)(t1 - t0));
+#endif
 }
 
 void HormannHCP1Component::trigger_action(HormannAction action) {
-  ESP_LOGD(TAG, "trigger_action called with action=%d", (int)action);
-  
-  // DEBUG: Send a test byte to verify TX is working
-  ESP_LOGV(TAG, "DEBUG: Sending test bytes on UART...");
-  this->write_byte(0xAA);
-  this->write_byte(0x55);
-  this->flush();
-  ESP_LOGV(TAG, "DEBUG: Test bytes sent");
-  
   switch (action) {
     case ACTION_STOP:
-      // Only stop if door is moving
-      if (this->door_state_.cover == COVER_OPENING || this->door_state_.cover == COVER_CLOSING) {
+      if (this->door_state_.cover == COVER_OPENING || this->door_state_.cover == COVER_CLOSING)
         this->slave_response_data_ = RESPONSE_IMPULSE;
-        ESP_LOGI(TAG, "Action: STOP");
-      }
       break;
-    case ACTION_OPEN:
-      this->slave_response_data_ = RESPONSE_OPEN;
-      ESP_LOGI(TAG, "Action: OPEN");
-      break;
-    case ACTION_CLOSE:
-      this->slave_response_data_ = RESPONSE_CLOSE;
-      ESP_LOGI(TAG, "Action: CLOSE");
-      break;
-    case ACTION_VENTING:
-      this->slave_response_data_ = RESPONSE_VENTING;
-      ESP_LOGI(TAG, "Action: VENTING");
-      break;
-    case ACTION_TOGGLE_LIGHT:
-      this->slave_response_data_ = RESPONSE_TOGGLE_LIGHT;
-      ESP_LOGI(TAG, "Action: TOGGLE_LIGHT");
-      break;
-    case ACTION_EMERGENCY_STOP:
-      this->slave_response_data_ = RESPONSE_EMERGENCY_STOP;
-      ESP_LOGI(TAG, "Action: EMERGENCY_STOP");
-      break;
-    case ACTION_IMPULSE:
-      this->slave_response_data_ = RESPONSE_IMPULSE;
-      ESP_LOGI(TAG, "Action: IMPULSE");
-      break;
-    default:
-      break;
+    case ACTION_OPEN: this->slave_response_data_ = RESPONSE_OPEN; break;
+    case ACTION_CLOSE: this->slave_response_data_ = RESPONSE_CLOSE; break;
+    case ACTION_VENTING: this->slave_response_data_ = RESPONSE_VENTING; break;
+    case ACTION_TOGGLE_LIGHT: this->slave_response_data_ = RESPONSE_TOGGLE_LIGHT; break;
+    case ACTION_EMERGENCY_STOP: this->slave_response_data_ = RESPONSE_EMERGENCY_STOP; break;
+    case ACTION_IMPULSE: this->slave_response_data_ = RESPONSE_IMPULSE; break;
+    default: break;
   }
 }
+
+void HormannHCP1Component::tx_diag() {
+#ifdef USE_ESP_IDF
+  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
+  // Recognizable marker pattern: 0xDE 0xAD 0xBE 0xEF repeated.
+  uint8_t buf[16];
+  for (int i = 0; i < 16; i += 4) { buf[i] = 0xDE; buf[i+1] = 0xAD; buf[i+2] = 0xBE; buf[i+3] = 0xEF; }
+
+  // Raise DE BEFORE writing (manual control — same as send_frame).
+  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(true);
+  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(!this->de_invert_);
+  esp_rom_delay_us(20);
+
+  uart_write_bytes(port, buf, 16);
+  uart_wait_tx_done(port, pdMS_TO_TICKS(100));
+  esp_rom_delay_us(600);  // hold DE for the last byte's shift-out
+
+  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(this->de_invert_);
+  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(false);
+  ESP_LOGW(TAG, "TX DIAG: sent 16 bytes (DE/RE toggled)");
+#endif
+}
+
+#endif  // USE_ESP_IDF
 
 }  // namespace hormann_hcp1
 }  // namespace esphome

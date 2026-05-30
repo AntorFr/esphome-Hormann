@@ -30,20 +30,13 @@ external_components:
       type: local
       path: components
 
-# UART configuration for RS485
-uart:
-  id: uart_rs485
-  tx_pin: GPIO17
-  rx_pin: GPIO16
-  baud_rate: 19200
-  data_bits: 8
-  parity: NONE
-  stop_bits: 1
-
-# Hörmann HCP1 component
+# Hörmann HCP1 component (uses ESP-IDF native UART driver directly,
+# do NOT declare a uart: block — the component owns the port)
 hormann_hcp1:
   id: hormann
-  uart_id: uart_rs485
+  uart_num: 1
+  tx_pin: 17
+  rx_pin: 16
   de_pin: GPIO4
   re_pin: GPIO5
 

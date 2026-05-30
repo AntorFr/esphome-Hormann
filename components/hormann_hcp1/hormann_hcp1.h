@@ -2,23 +2,27 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/gpio.h"
-#include "esphome/components/uart/uart.h"
+#include "esphome/core/hal.h"
+
+#ifdef USE_ESP_IDF
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#endif
 
 namespace esphome {
 namespace hormann_hcp1 {
 
-// Protocol constants
 static const uint8_t BROADCAST_ADDR = 0x00;
 static const uint8_t MASTER_ADDR = 0x80;
 static const uint8_t UAP1_ADDR = 0x28;
 static const uint8_t UAP1_TYPE = 0x14;
 
-// Commands
 static const uint8_t CMD_SLAVE_SCAN = 0x01;
 static const uint8_t CMD_SLAVE_STATUS_REQUEST = 0x20;
 static const uint8_t CMD_SLAVE_STATUS_RESPONSE = 0x29;
 
-// Response codes
 static const uint16_t RESPONSE_DEFAULT = 0x1000;
 static const uint16_t RESPONSE_EMERGENCY_STOP = 0x0000;
 static const uint16_t RESPONSE_OPEN = 0x1001;
@@ -27,10 +31,8 @@ static const uint16_t RESPONSE_VENTING = 0x1010;
 static const uint16_t RESPONSE_TOGGLE_LIGHT = 0x1008;
 static const uint16_t RESPONSE_IMPULSE = 0x1004;
 
-// CRC
 static const uint8_t CRC8_INITIAL_VALUE = 0xF3;
 
-// Cover states
 enum CoverState {
   COVER_STOPPED = 0,
   COVER_OPEN,
@@ -39,7 +41,6 @@ enum CoverState {
   COVER_CLOSING
 };
 
-// Actions
 enum HormannAction {
   ACTION_NONE = 0,
   ACTION_STOP,
@@ -51,7 +52,6 @@ enum HormannAction {
   ACTION_IMPULSE
 };
 
-// Door state structure
 struct DoorState {
   CoverState cover{COVER_STOPPED};
   bool venting{false};
@@ -62,24 +62,28 @@ struct DoorState {
   bool data_valid{false};
 };
 
-class HormannHCP1Component : public Component, public uart::UARTDevice {
+class HormannHCP1Component : public Component {
  public:
   void setup() override;
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::BUS; }
 
-  // Pin configuration for RS485 direction control
+  void set_uart_num(uint8_t num) { this->uart_num_ = num; }
+  void set_tx_pin(int pin) { this->tx_pin_ = pin; }
+  void set_rx_pin(int pin) { this->rx_pin_ = pin; }
   void set_de_pin(GPIOPin *pin) { this->de_pin_ = pin; }
   void set_re_pin(GPIOPin *pin) { this->re_pin_ = pin; }
+  void set_slave_addr(uint8_t addr) { this->slave_addr_ = addr; }
+  void set_master_addr(uint8_t addr) { this->master_addr_ = addr; }
+  void set_slave_type(uint8_t type) { this->slave_type_ = type; }
+  void set_auto_scan(bool enable) { this->auto_scan_ = enable; }
+  void set_de_invert(bool inv) { this->de_invert_ = inv; }
+  void set_tx_test(bool enable) { this->tx_test_ = enable; }
 
-  // Get current door state
   DoorState get_door_state() const { return this->door_state_; }
-  
-  // Check if we have valid data
   bool is_data_valid() const { return this->door_state_.data_valid; }
 
-  // Trigger actions
   void trigger_action(HormannAction action);
   void open_door() { trigger_action(ACTION_OPEN); }
   void close_door() { trigger_action(ACTION_CLOSE); }
@@ -88,57 +92,59 @@ class HormannHCP1Component : public Component, public uart::UARTDevice {
   void toggle_light() { trigger_action(ACTION_TOGGLE_LIGHT); }
   void impulse() { trigger_action(ACTION_IMPULSE); }
   void emergency_stop() { trigger_action(ACTION_EMERGENCY_STOP); }
+  void tx_diag();  // Diagnostic: forces DE high and sends 0xAA repeatedly
 
-  // Callbacks for state changes
-  void add_on_state_callback(std::function<void()> callback) { 
-    this->state_callback_.add(std::move(callback)); 
+  void add_on_state_callback(std::function<void()> callback) {
+    this->state_callback_.add(std::move(callback));
   }
 
  protected:
-  // RS485 direction control pins
-  GPIOPin *de_pin_{nullptr};  // Driver Enable
-  GPIOPin *re_pin_{nullptr};  // Receiver Enable (active low)
+  uint8_t uart_num_{1};
+  int tx_pin_{17};
+  int rx_pin_{16};
+  GPIOPin *de_pin_{nullptr};
+  GPIOPin *re_pin_{nullptr};
+  uint8_t slave_addr_{UAP1_ADDR};
+  uint8_t master_addr_{MASTER_ADDR};
+  uint8_t slave_type_{UAP1_TYPE};
+  bool auto_scan_{false};
+  bool de_invert_{false};
+  bool tx_test_{false};
+  uint32_t tx_test_last_{0};
+  uint8_t auto_scan_idx_{0};
+  uint32_t auto_scan_last_change_{0};
+  bool combo_locked_{false};
 
-  // RX/TX buffers
-  uint8_t rx_buffer_[20];
-  uint8_t tx_buffer_[20];
-  int8_t rx_counter_{-1};
+#ifdef USE_ESP_IDF
+  QueueHandle_t uart_queue_{nullptr};
+  TaskHandle_t bus_task_{nullptr};
+  static void bus_task_trampoline(void *arg);
+  void bus_task();
+#endif
+
+  uint8_t rx_buffer_[20]{};
+  uint8_t rx_counter_{0};
   uint8_t rx_length_{0};
-  bool rx_message_ready_{false};
-  bool tx_message_ready_{false};
-  uint8_t tx_length_{0};
-  uint8_t tx_counter_{0};
+  bool frame_started_{false};
 
-  // Protocol state
+  uint8_t tx_buffer_[20]{};
+  uint8_t tx_length_{0};
+
   DoorState door_state_;
   uint16_t broadcast_status_{0};
-  uint16_t slave_response_data_{RESPONSE_DEFAULT};
-  uint8_t message_counter_{0};
-  uint32_t last_message_time_{0};
-  uint8_t delay_counter_{0};
+  volatile uint16_t slave_response_data_{RESPONSE_DEFAULT};
+  volatile bool state_changed_{false};
 
-  // Pending action
-  HormannAction pending_action_{ACTION_NONE};
-  
-  // Debug flag
-  bool setup_done_{false};
-
-  // CRC table for polynomial 0x07
   static const uint8_t crc_table_[256];
 
-  // Internal methods
   uint8_t calculate_crc(const uint8_t *data, uint8_t length);
+  void try_parse_buffered();
   void parse_message();
-  void start_listening();
-  void stop_listening();
-  void start_sending();
-  void stop_sending();
-  void send_response();
   void process_broadcast(uint8_t length);
   void process_slave_scan(uint8_t counter);
   void process_status_request(uint8_t counter);
+  void send_frame(uint8_t length);
 
-  // Callback
   CallbackManager<void()> state_callback_;
 };
 
