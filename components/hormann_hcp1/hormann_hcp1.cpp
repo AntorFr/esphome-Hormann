@@ -262,7 +262,28 @@ void HormannHCP1Component::bus_task() {
   uint8_t buf[64];
 
   for (;;) {
-    if (xQueueReceive(this->uart_queue_, &event, portMAX_DELAY) != pdTRUE) {
+    // Test A/B (drive vs timing): fire the EXACT scan-reply frame from THIS task on a
+    // 2s WALL-CLOCK timer — async to the master's traffic — via the same send_frame()
+    // path. With the master OFF it lands in the clear (drive proof); with the master ON
+    // it lands at random offsets: if NONE reach the witness clean -> drive/loading
+    // problem; if some do -> pure timing/collision. Checked each iteration so it fires
+    // even when the queue is busy with master frames.
+    if (this->bustask_tx_test_ && this->de_pin_ != nullptr) {
+      uint32_t now = millis();
+      if (this->bustask_tx_last_ == 0 || now - this->bustask_tx_last_ >= 2000) {
+        this->bustask_tx_last_ = now;
+        this->tx_buffer_[0] = this->master_addr_;
+        this->tx_buffer_[1] = 0x02 | 0x10;
+        this->tx_buffer_[2] = this->slave_type_;
+        this->tx_buffer_[3] = this->slave_addr_;
+        this->tx_buffer_[4] = calculate_crc(this->tx_buffer_, 4);
+        ESP_LOGW(TAG, "BUSTASK-TX-TEST: firing scan-reply (80:%02X:%02X:%02X) from bus_task",
+                 this->tx_buffer_[1], this->slave_type_, this->slave_addr_);
+        send_frame(5);
+      }
+    }
+    TickType_t wait = this->bustask_tx_test_ ? pdMS_TO_TICKS(200) : portMAX_DELAY;
+    if (xQueueReceive(this->uart_queue_, &event, wait) != pdTRUE) {
       continue;
     }
     switch (event.type) {

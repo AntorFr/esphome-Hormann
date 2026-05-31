@@ -97,6 +97,7 @@ class HormannHCP1Component : public Component {
   void set_auto_scan(bool enable) { this->auto_scan_ = enable; }
   void set_de_invert(bool inv) { this->de_invert_ = inv; }
   void set_tx_test(bool enable) { this->tx_test_ = enable; }
+  void set_bustask_tx_test(bool enable) { this->bustask_tx_test_ = enable; }
   void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
   void set_sniffer(bool enable) { this->sniffer_ = enable; }
   void set_reply_delay_us(uint32_t us) { this->reply_delay_us_ = us; }
@@ -131,6 +132,10 @@ class HormannHCP1Component : public Component {
   bool de_invert_{false};
   bool tx_test_{false};
   uint32_t tx_test_last_{0};
+  // Test A/B: fire the real scan-reply from the bus_task context (not loop()) on a
+  // 2s wall-clock timer — async to master traffic — to discriminate drive vs timing.
+  bool bustask_tx_test_{false};
+  uint32_t bustask_tx_last_{0};
   uint32_t reply_delay_us_{0};       // micro-delay before TX (eager-reply window tuning)
   volatile int64_t last_rx_us_{0};   // timestamp of last received byte (reply-latency instr.)
 

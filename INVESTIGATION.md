@@ -469,6 +469,49 @@ Bouton = **`reply_delay_us`** (déjà implémenté). Plan : rebrancher le moteur
 
 ---
 
+## 4 septies. Session 2026-05-31 (suite) — drive vs timing TRANCHÉ : c'est le timing
+
+Doute soulevé : la réponse émise par le `bus_task` (`send_frame`) n'avait jamais été *vue* proprement au witness avec le master branché (alors que `tx_diag`, émis depuis `loop()`, l'était). Hypothèse à écarter : « le TX du `bus_task` ne pilote pas le bus » / « notre drive 3.3 V est trop faible face au master ». Outil ajouté : `bustask_tx_test` — tire la **vraie** trame scan-reply (`80:12:14:28:A7`, CRC valide) **depuis le `bus_task`**, via le chemin `send_frame` exact.
+
+### Test A — `bus_task` émet bien (moteur débranché)
+`bustask_tx_test:true`, moteur débranché, garage-3 ↔ witness. Le witness capte, toutes les ~2 s :
+```
+SNIFF ->master   80:12:14:28:A7   (+2 identical)   ← 0 junk, CRC valide
+```
+→ **Le `send_frame` du `bus_task` pilote parfaitement le bus.** L'hypothèse « TX bus_task mort » est **réfutée**. Le mécanisme TX est sain de bout en bout (core 1 inclus).
+
+### Test « maître hors secteur » (idée terrain) — ARTEFACT
+Bus branché mais **maître hors tension** : garage-3 émet (`TX took ~4.2 ms`, log local) mais le witness voit **0/0/0**. Symétrique et reproductible (bus branché → 0 ; débranché → 5 valid = nos tirs).
+→ **Artefact de diodes de protection** : le transceiver du maître **non alimenté** présente ses diodes ESD A/B vers son rail Vcc = 0 V ; driver le bus les fait conduire vers le rail mort → **clamp**. Classique « appareil éteint qui plombe un segment RS485 ». **Non représentatif** du maître *allumé* (Vcc présent, diodes bloquées, idle RS485 normal). **Aucune conclusion** sur le drive depuis ce test.
+
+### Test B — discriminant drive vs timing (maître ALLUMÉ)
+`bustask_tx_test` passé en **timer wall-clock 2 s** (tir asynchrone au trafic, même en pleine réception ; sinon, maître allumé, le `bus_task` ne hit jamais le timeout d'inactivité). ~16 tirs sur 32 s. Résultat witness :
+```
+SNIFF JUNK[6]  80:92:A7:FB:62     ← 80 (notre début) … A7 (notre CRC) + 62 (octet broadcast)
+SNIFF JUNK[6]  80:A9:2A:A7:EF     ← 80 … 2A(≈28 garbé) … A7 (notre CRC)
+SNIFF JUNK[6]  90:F7:A7:FB:AC     ← A7 (notre CRC) mêlé
+```
+- **Nos octets (`80`, `28`, `A7`) ARRIVENT au witness** même maître allumé → si c'était un défaut de drive, ils seraient **absents**. **Drive : OK, définitivement écarté.**
+- Mais **systématiquement superposés** à des octets maître/broadcast (`62`, `02:02`…). ~1 junk par tir, **0/16 propre.**
+- 0/16 propre s'explique par le **calage de phase** : le `bus_task` vérifie le timer en haut de boucle, juste après avoir traité un event reçu → on tire ~0 ms après une trame maître → on tape pile sur la suivante (le maître émet scan+broadcast **collés**). Timing aléatoire-mais-calé, donc *non* représentatif du vrai eager-reply (qui, lui, tire après le scan-vers-nous = la vraie fenêtre).
+
+### Verdict consolidé
+| Hypothèse | Statut |
+|---|---|
+| Polarité / RX | ✅ résolu (cf. §4 quinquies) |
+| Mécanisme TX (`bus_task`) | ✅ **sain** (Test A + octets visibles maître allumé) |
+| Drive faible / clamp maître | ❌ **écarté** (artefact diodes de protection) |
+| **Collision / timing** | ✅ **confirmé** — LE blocage |
+
+### Deux leviers identifiés pour le timing
+1. **`reply_delay_us: 1000`** ajoute 1 ms de retard inutile → repasser à **0**.
+2. **TX ~4.3 ms** = break `0x00` (~520 µs) + 5 octets (~2.6 ms) + hold DE 600 µs + delay 1 ms. **Long** vs la fenêtre maître (scan→broadcast collés). Pistes : virer le break `0x00`, réduire le hold 600 µs.
+
+### Prochaine étape
+Couper `bustask_tx_test`, revenir au **vrai eager-reply** avec `reply_delay_us:0`, et observer au witness si le **broadcast juste après le scan-vers-nous se corrompt** (= notre reply tombe dedans) — puis attaquer la **durée du TX**.
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :

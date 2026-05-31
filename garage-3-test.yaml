@@ -68,10 +68,11 @@ hormann_hcp1:
   # re_pin: GPIO5
   auto_scan: false
   de_invert: false
-  tx_test: false   # back off the bus spammer; TX proven clean (see INVESTIGATION 4sexies)
+  tx_test: false        # bus spammer off; TX proven clean (INVESTIGATION 4sexies/septies)
+  bustask_tx_test: false # diagnostic off; drive proven OK, blocker = timing (4septies)
   ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false (marking wiring)
   sniffer: false       # lean bus_task; the witness keeps sniffer:true as the oracle
-  reply_delay_us: 1000 # SWEEP: tune to land our reply in the master's window (watch witness STATUS_REQ)
+  reply_delay_us: 0    # was 1000: that 1ms was pure added latency; back to 0 (4septies)
 
 cover:
   - platform: hormann_hcp1
