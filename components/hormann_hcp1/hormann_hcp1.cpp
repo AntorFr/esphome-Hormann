@@ -447,11 +447,24 @@ void HormannHCP1Component::sniff_log_frame_(const uint8_t *frame, uint8_t length
   if (addr == BROADCAST_ADDR) {
     cat = "BCAST";
   } else if (addr == this->slave_addr_) {
-    if (cmd == CMD_SLAVE_SCAN) cat = "SCAN->us";
-    else if (cmd == CMD_SLAVE_STATUS_REQUEST) cat = "STATUS_REQ->us ***";
+    if (cmd == CMD_SLAVE_SCAN) { cat = "SCAN->us"; this->sniff_req_ms_ = now; }
+    else if (cmd == CMD_SLAVE_STATUS_REQUEST) { cat = "STATUS_REQ->us ***"; this->sniff_req_ms_ = now; }
     else { snprintf(catbuf, sizeof(catbuf), "->us cmd=0x%02X", cmd); cat = catbuf; }
   } else if (addr == this->master_addr_) {
-    cat = "->master";
+    // Is this OUR reply (the device-under-test answering the master)? A real UAP1
+    // scan-response is [type 0x14][slave 0x28]; status-response carries cmd 0x29.
+    // Flag it distinctly + the passive latency since the matching request, so the
+    // witness CONFIRMS our reply reaches the bus clean and at ~3.84 ms like a real UAP1.
+    bool our_scanresp = (plen >= 2 && frame[2] == this->slave_type_ && frame[3] == this->slave_addr_);
+    bool our_statusresp = (cmd == CMD_SLAVE_STATUS_RESPONSE);
+    if (our_scanresp || our_statusresp) {
+      uint32_t lat = this->sniff_req_ms_ ? (now - this->sniff_req_ms_) : 0;
+      snprintf(catbuf, sizeof(catbuf), "%s +%ums", our_scanresp ? "OUR-SCANRESP<<<" : "OUR-STATUSRESP<<<",
+               (unsigned) lat);
+      cat = catbuf;
+    } else {
+      cat = "->master";
+    }
   } else {
     cat = "?";
   }

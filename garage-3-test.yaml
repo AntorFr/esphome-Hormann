@@ -72,7 +72,9 @@ hormann_hcp1:
   bustask_tx_test: false # diagnostic off; drive proven OK, blocker = timing (4septies)
   ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false (marking wiring)
   sniffer: false       # lean bus_task; the witness keeps sniffer:true as the oracle
-  reply_delay_us: 0    # was 1000: that 1ms was pure added latency; back to 0 (4septies)
+  reply_delay_us: 3800 # MATCH real UAP1: 3.84ms median req->resp latency (Saleae, 4octies)
+                       # we replied ~20us (eager) = 190x too early, during master's RS485
+                       # turnaround -> master never read us -> never escalated to status_req
 
 cover:
   - platform: hormann_hcp1

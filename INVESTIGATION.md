@@ -512,6 +512,45 @@ Couper `bustask_tx_test`, revenir au **vrai eager-reply** avec `reply_delay_us:0
 
 ---
 
+## 4 octies. Session 2026-05-31/06-01 — 🎯 CAUSE RACINE : on répond ~190× trop tôt (traces Saleae bouni)
+
+On a enfin analysé les **traces logiques d'un VRAI UAP1** ([blog.bouni.de](https://blog.bouni.de/posts/2018/hoerrmann-uap1/logic-traces.zip), jamais ouvertes jusqu'ici — le blog lui-même ne donne **aucun** timing). Fichier `.logicdata` (Saleae Logic 1.x) exporté en CSV (transitions TX/RX/Dir horodatées µs), puis **UART-décodé maison** (19200 8N1) : Ch3 (Dir) = bus complet / requêtes maître, Ch1 (TX) = réponses UAP1. Toutes CRC valides.
+
+### Séquence réelle décodée
+```
+maître  00:28:02:01:80:0D   scan → 0x28
+UAP1    00:80:12:14:28:A7    scan-response          (≡ NOTRE réponse, même CRC)
+maître  00:00:12:01:02:56    broadcast
+maître  00:28:21:20:98       status_request → 0x28  (le maître ESCALADE)
+UAP1    00:80:X3:29:00:10:CRC status-response
+```
+
+### LE chiffre : latence requête→réponse
+Mesure fin-de-requête → début-de-réponse sur 68 cycles :
+```
+3.92, 3.86, 3.90, 3.82, 3.77, 3.85, 3.72, 3.93, 3.96, 3.90 ...
+n=68 : min 3.70 / MÉDIANE 3.84 / max 4.19 ms
+```
+**Un vrai UAP1 attend ~3.84 ms (très stable, ±0.2) après la fin de la requête avant d'émettre sa réponse** (break 0x00 inclus, durée ~4.3 ms).
+
+### Cause racine de l'échec commande
+Notre instrumentation (§4 quinquies/septies) mesurait une latence de réponse de **~20 µs** (chemin eager). **On répond ~190× trop tôt**, en plein **retournement RS485 du maître** (driver pas encore basculé en réception) → le maître ne lit jamais notre scan-response → il ne nous enregistre pas → **il n'escalade jamais vers `status_request`**. C'est tout le symptôme « commandes qui ne passent pas » depuis le début.
+
+Le balayage `reply_delay_us` précédent avait testé **0 / 1 ms / 8 ms** : tous **ratent** la fenêtre ~3.8 ms (trop tôt, trop tôt, trop tard). La bonne valeur n'avait jamais été essayée.
+
+### Ce que les traces CONFIRMENT par ailleurs (tout sauf le timing est bon)
+- **break `0x00` en tête : RÉEL** chez un vrai UAP1 → le nôtre est correct.
+- **`80:12:14:28:A7` byte-pour-byte identique** à notre scan-response (même CRC).
+- **durée TX ~4.3 ms (break inclus) : identique** à la nôtre → « notre TX est trop long » est **FAUX**, un vrai UAP1 est aussi « lent ». Raccourcir le TX serait une erreur.
+- master=0x80, slave=0x28, type=0x14, cmd scan=0x01 / status_req=0x20 / status_resp=0x29, poll ~toutes les ~100 ms : tout concorde.
+
+### Fix implémenté
+**`reply_delay_us: 3800`** (caler sur la médiane 3.84 ms du vrai UAP1), eager-reply gardé, `bustask_tx_test:false`. Succès attendu = le maître escalade → garage-3 reçoit `status_request` → les commandes porte fonctionnent. Si 3800 ne suffit pas : balayer **finement 3500–4100 µs** (la fenêtre semble étroite, ±0.2 ms sur le vrai UAP1).
+
+Méthode réutilisable : `.logicdata` → CSV (Logic 1.x, requis) → décodeur UART Python maison (`/Users/berard/Downloads/logic-traces/`).
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :
