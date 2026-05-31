@@ -56,7 +56,7 @@ uart:
   id: bus_uart
   rx_pin:
     number: GPIO19
-    inverted: false   # set to true to test polarity inversion
+    inverted: false 
   tx_pin: GPIO17
   baud_rate: 19200
   data_bits: 8

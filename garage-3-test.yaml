@@ -36,7 +36,8 @@ ota:
 captive_portal:
 
 logger:
-  level: DEBUG
+  level: INFO   # was DEBUG: at high frame rate the per-byte RX dump from the bus
+                # task floods the logger and crash-loops the app. Sniffer logs at INFO.
 
 #######################################
 # Device specific Config Begins Below #
@@ -68,6 +69,9 @@ hormann_hcp1:
   auto_scan: false
   de_invert: false
   tx_test: false   # DEBUG: emit DE AD BE EF every 2s to verify witness RX
+  ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false (marking wiring)
+  sniffer: false       # TEST: lean bus_task (no pre-reply logging) to minimise TX latency.
+                       # The witness keeps sniffer:true as the oracle.
 
 cover:
   - platform: hormann_hcp1

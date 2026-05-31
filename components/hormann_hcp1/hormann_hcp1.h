@@ -98,6 +98,7 @@ class HormannHCP1Component : public Component {
   void set_de_invert(bool inv) { this->de_invert_ = inv; }
   void set_tx_test(bool enable) { this->tx_test_ = enable; }
   void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
+  void set_sniffer(bool enable) { this->sniffer_ = enable; }
 
   DoorState get_door_state() const { return this->door_state_; }
   bool is_data_valid() const { return this->door_state_.data_valid; }
@@ -142,6 +143,20 @@ class HormannHCP1Component : public Component {
   uint32_t auto_scan_last_change_{0};
   bool combo_locked_{false};
 
+  // Sniffer / bus witness: log only valid, categorized, de-duplicated frames.
+  bool sniffer_{false};
+  uint8_t sniff_last_key_[18]{};      // last logged frame's dedup key (addr+len+payload)
+  uint8_t sniff_last_len_{0};
+  uint32_t sniff_suppressed_{0};      // identical frames collapsed since last log
+  uint32_t sniff_last_log_ms_{0};
+  volatile uint32_t sniff_valid_{0};  // valid operational frames seen (sniffer stats)
+  volatile uint32_t sniff_junk_{0};   // buffers with data but no valid frame for us
+  uint32_t sniff_valid_snap_{0};      // loop-owned snapshots for per-window deltas
+  uint32_t sniff_junk_snap_{0};
+  uint32_t sniff_err_snap_{0};
+  uint32_t sniff_stats_last_{0};
+  uint32_t sniff_junk_log_ms_{0};     // rate-limit for logging unparseable (junk) buffers
+
 #ifdef USE_ESP_IDF
   QueueHandle_t uart_queue_{nullptr};
   TaskHandle_t bus_task_{nullptr};
@@ -172,6 +187,8 @@ class HormannHCP1Component : public Component {
   void process_status_request(uint8_t counter);
   void send_frame(uint8_t length);
   void apply_line_inversion_();  // (re)apply RXD/TXD mask (TX follows RX when auto) + flush RX
+  void sniff_scan_();                                           // read-only: count + log valid frames
+  void sniff_log_frame_(const uint8_t *frame, uint8_t length);  // categorized, de-duped INFO log
 
   CallbackManager<void()> state_callback_;
 };

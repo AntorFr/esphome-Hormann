@@ -5,6 +5,10 @@ from esphome import pins
 
 DEPENDENCIES = []
 MULTI_CONF = False
+# Platform .cpp files (cover/light/binary_sensor/button) compile unconditionally,
+# so their core headers must always be available — even when the hub is used alone
+# (e.g. the witness sniffer declares no entities). AUTO_LOAD pulls them in.
+AUTO_LOAD = ['binary_sensor', 'button', 'cover', 'light']
 
 CONF_HORMANN_HCP1_ID = 'hormann_hcp1_id'
 CONF_UART_NUM = 'uart_num'
@@ -19,6 +23,7 @@ CONF_AUTO_SCAN = 'auto_scan'
 CONF_DE_INVERT = 'de_invert'
 CONF_TX_TEST = 'tx_test'
 CONF_AB_INVERTED = 'ab_inverted'
+CONF_SNIFFER = 'sniffer'
 
 hormann_hcp1_ns = cg.esphome_ns.namespace('hormann_hcp1')
 HormannHCP1Component = hormann_hcp1_ns.class_('HormannHCP1Component', cg.Component)
@@ -39,6 +44,8 @@ CONFIG_SCHEMA = cv.Schema({
     # A/B polarity (applies to RX and TX together — one differential pair):
     # false/true to force, or 'auto' to detect at boot (default).
     cv.Optional(CONF_AB_INVERTED, default='auto'): cv.Any(cv.boolean, cv.one_of('auto', lower=True)),
+    # Bus witness: log only valid, categorized, de-duplicated frames (INFO level).
+    cv.Optional(CONF_SNIFFER, default=False): cv.boolean,
 }).extend(cv.COMPONENT_SCHEMA)
 
 
@@ -60,6 +67,8 @@ async def to_code(config):
     ab_inv = config[CONF_AB_INVERTED]
     ab_inv_mode = 2 if ab_inv == 'auto' else (1 if ab_inv else 0)
     cg.add(var.set_ab_inverted_mode(ab_inv_mode))
+
+    cg.add(var.set_sniffer(config[CONF_SNIFFER]))
 
     if CONF_DE_PIN in config:
         de_pin = await cg.gpio_pin_expression(config[CONF_DE_PIN])

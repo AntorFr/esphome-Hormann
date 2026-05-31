@@ -378,22 +378,29 @@ Le câblage A/B et `inverted:` (sur le rx_pin du composant uart natif, ex. witne
 
 → La config qui décode aujourd'hui : **câblage inversé (B/A) + `inverted: true`**.
 
-### Le symptôme qui bloque
-- **En sens marquage (A/B) on ne reçoit RIEN** (aucune trame cadrée), à l'**identique sur witness ET garage-3**.
-- **Or il y a quelques semaines, ce même sens marquage SANS inversion décodait des CRC correctes** (cf. TL;DR « lecture d'état fonctionnelle »). Donc quelque chose a changé dans le montage depuis.
+### Ce qui bloque la commande : la polarité du **TX** (pas le « rien »)
+Argument décisif, par **asymétrie lecture/écriture**. RX et TX partagent la **même paire différentielle** :
+- On **lit** le master (décodage OK en B/A + inversion) → la polarité RX est correctement compensée.
+- On n'arrive **pas** à le commander (master muet, jamais de `status_request`).
 
-### Diagnostic
-- **Même comportement sur deux puces/ESP différents → cause côté BUS (partagé), pas dans un module.** (À reconfirmer en retestant garage-3.)
-- **Ce qui a changé depuis « ça marchait » : ajout de la terminaison 120 Ω** (avant : ~3 kΩ entre A/B, donc quasi rien) + passage en 5 V.
-- **Hypothèse n°1 : terminaison sans polarisation fail-safe.** Le SP3485 n'a pas de biais fail-safe interne. Au repos (bus non piloté), A−B n'est défini que par un biais faible venant du moteur. Avec ~3 kΩ ce biais survivait (idle = mark → cadrage OK). Avec 120 Ω, la terminaison tire A et B fortement l'un vers l'autre (A−B → ~0) et **noie** ce biais → idle indéterminé/space → break permanent → rien. Classique RS485 : ajouter une terminaison sans résistances de polarisation casse un montage qui marchait en flottant.
-- L'asymétrie restante (pourquoi le sens marquage meurt et le sens inversé survit, alors qu'un différentiel inversé devrait être l'inverse logique exact) n'est pas pleinement expliquée par la théorie → à trancher par la **mesure**.
+Si on ne compense que le RX et **pas le TX**, alors à l'émission nos trames partent à l'envers sur le bus → le master les reçoit avec tous les bits complémentés → CRC faux → il nous ignore → jamais de `status_request`. **Cela reproduit exactement le symptôme** (lecture OK / commande morte). C'est un problème **bel et bien au niveau du bus**, et c'est précisément ce que corrige `ab_inverted` (couple `RXD_INV | TXD_INV`, cf. ci-dessous).
 
-### Tests à faire (prochaine session) — du plus rapide au plus propre
-1. **Enlever le 120 Ω**, retester sens marquage + `inverted:false`. Si ça redécode → terminaison confirmée coupable.
-2. **Mesurer A−B au repos** (moteur sous tension, personne n'émet), au voltmètre, **dans les deux sens de câblage**. En sens marquage on attend A−B ≈ 0 ou négatif (= space = le « rien »).
-3. **Ajouter une polarisation fail-safe** : A → VCC via ~560–680 Ω, B → GND via ~560–680 Ω. But : garantir A−B > 200 mV au repos malgré le 120 Ω. Devrait faire revivre le sens marquage **quel que soit** le câblage.
-4. **Repasser le SP3485 en 3,3 V** : 5 V est hors specs (VCC reco ≤ 3,6 V) et son RO sortirait à ~5 V dans une GPIO ESP 3,3 V non tolérante. À corriger pendant les tests.
-5. **Confirmer garage-3 == witness** (le retester) pour valider que c'est bien côté bus.
+**Test qui prouve le TX sans dépendre du master (témoin = oracle) :** le witness décode le master proprement (B/A + `inverted:true`), donc il sait lire la bonne polarité.
+1. garage-3 : `ab_inverted: true`, lancer une rafale TX connue (`tx_diag`, ex. `0xAA`).
+2. Observer le witness : nos octets sortent-ils **propres** (comme ceux du master) ou en **charabia** ?
+   - Propres → TX à la bonne polarité → le master *devrait* pouvoir nous lire → réactiver `auto_scan` et guetter le `status_request`.
+   - Charabia → TX encore inversé → creuser.
+
+Cela isole la polarité TX de la logique d'acceptation (inconnue) du master.
+
+### Le « rien » en sens marquage : RÉSOLU — c'était le 5 V (sur-tension)
+- **Résolu le 2026-05-31** : repasser le SP3485 en **3,3 V** restaure le signal sur **les deux polarités**. Le 5 V (hors specs, VCC reco ≤ 3,6 V) sortait le récepteur de ses limites et tuait la réception sur une des deux orientations → c'était ça le « rien », **pas** le 120 Ω ni un défaut de biais.
+- **Le 120 Ω était bien hors de cause** (confirmé) : présent dans le cas qui décode, et symétrique → ne peut pas créer d'asymétrie d'orientation. Hypothèse « régression terminaison » **abandonnée**.
+- À 3,3 V on retrouve le comportement **XOR propre** : les deux orientations cadrent, une seule donne des CRC valides (l'autre = data complémentée). Plus d'asymétrie « rien ».
+- ⚠️ **Conséquence pour l'auto-détecteur** : à 3,3 V la mauvaise polarité **cadre** (peu/pas de breaks), donc le déclencheur actuel « beaucoup d'erreurs → basculer » peut ne pas suffire (il verrait « trafic, 0 trame valide, 0 erreur » → branche « pas de trafic »). À durcir : basculer aussi sur « trafic reçu mais 0 trame CRC-valide ». Pour les tests HW, **forcer `ab_inverted: true|false`** plutôt que `auto`.
+
+### Hygiène matérielle
+- **SP3485 en 3,3 V** ✅ FAIT — et c'était en fait le **fix du « rien »** (cf. ci-dessus), pas juste de l'hygiène. (Bonus : son RO ne sort plus à ~5 V dans une GPIO ESP 3,3 V non tolérante.)
 
 ### Auto-inverseur de polarité — IMPLÉMENTÉ (composant, 2026-05-31)
 Le composant possède le port UART en direct (pas de bloc `uart:`), donc l'astuce `inverted: true` d'ESPHome ne s'applique pas. On a implémenté à la place une option **`ab_inverted: auto | true | false`** (défaut `auto`) qui appelle `uart_set_line_inverse()` :
@@ -405,14 +412,40 @@ Le composant possède le port UART en direct (pas de bloc `uart:`), donc l'astuc
 
 ---
 
+## 4 quinquies. Session 2026-05-31 (suite) — RX débloqué, crash durci, COLLISION TX identifiée
+
+### Polarité : RÉSOLUE et confirmée
+Câblage **sens marquage + `ab_inverted: false`** → **CRC valides à 100 %** sur les deux cartes (garage-3-test GPIO19, witness GPIO18), vérifié trame par trame. Le master nous scanne proprement (`28:82:01:80:06`). RX = parfait. (L'ancien « rien » était le 5 V sur le SP3485 3,3 V, cf. §4quater ; le 120 Ω était innocent.)
+
+### Bug « bus-clamp » (RTS) — la cause du « 0 RX partout »
+Le composant assignait `de_pin` (GPIO4) comme **RTS** de l'UART (`uart_set_pin(..., rts=GPIO4, ...)`) tout en restant en DE **manuel** (pas de `UART_MODE_RS485_HALF_DUPLEX`). Sans ce mode, le driver tient RTS **désactivé = HIGH** au repos → EN du SP3485 HIGH → **mode TX permanent** → garage-3 **pilote le bus en continu** → **tous les nœuds voient 0** (witness inclus, d'où le piège : symptôme « global » mais une seule carte coupable). **Fix** : ne plus assigner DE en RTS (`UART_PIN_NO_CHANGE`), DE purement manuel (repos LOW = RX). → bus déclampé, RX OK des deux côtés (282 trames/10 s).
+
+### Crash `bus_task` (core 1) — durci
+Une fois le RX actif, le `bus_task` (priorité 23) **inondait les logs DEBUG par octet** (`<<<` + `RX[n]`, gros buffers) → fault core 1 → crash-loop → safe mode (ping OK mais API refusée, port 6053). **Fix** : (1) dump brut passé en `ESP_LOGV` **et** gardé par `#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE` (le `#if` retire aussi la **construction** du hex, pas que le log) ; (2) pile `bus_task` 4096 → 8192. → stable (0 junk côté garage-3, pas de crash).
+
+### Outil : sniffer intégré + junk-log
+Option `sniffer: true` → logue à INFO uniquement les trames valides catégorisées (BCAST / SCAN->us / STATUS_REQ->us / ->master), dédupées (compteur ignoré, re-log toutes les 5 s), + heartbeat 10 s (`valid / junk / breaks`). Plus **log des octets « junk »** (rate-limité 500 ms) pour voir les buffers non parsables. Le **witness** tourne ce composant en RX-only (DE/RE→GND) = **oracle TX**.
+
+### 🎯 Bloqueur de commande = COLLISION du TX (vu via junk-log)
+Le master nous scanne, garage-3 répond (`TX took ~4,3 ms`), **mais la réponse n'arrive jamais propre** : le witness la voit en **junk**, ex. `80:92:D6:62:00` → nos 2 premiers octets (`80 92`) sont **propres**, puis collision dès l'octet 3 (`D6` superposition, `62` CRC broadcast, `00` sync). Chaque collision **détruit une trame master** (valid 282 → 279, des deux côtés : le master perd notre collision, garage-3 — sourd pendant ses 4,3 ms de TX — rate la trame émise pendant ce temps). → on émet **~1-2 octets trop tard**, par-dessus le broadcast suivant. **Pas la polarité** (RX parfait, même paire). C'est la vieille obs §4 « notre TX corrompt le broadcast », **vue directement**.
+
+**Contributeur de latence** : dans `try_parse_buffered`, `sniff_scan_()` fait un `ESP_LOGI` **bloquant** (« SCAN->us », écriture console ~ms) **avant** `send_frame` → retarde la réponse.
+
+### Prochaines étapes (timing TX)
+1. Test isolant : garage-3 `sniffer:false` (bus_task maigre, latence TX minimale) + witness oracle → la réponse atterrit-elle propre ?
+2. Si oui → sortir le logging du `bus_task` (ring-buffer drainé dans `loop()`, non bloquant). Si non → instrumenter le délai scan→réponse, viser la fenêtre exacte du master (§5.B ; refs : raintonr = immédiat, stephan192 = ~3 ms).
+3. Comprendre `TX took 4,3 ms` pour 6 octets (~3,1 ms de data) — l'octet `0x00` de break en tête + le hold 600 µs après `wait_tx_done`.
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :
 
 1. ~~**Alimenter le module RS485 en 5V**~~ ✅ FAIT
 2. ~~**Mesure 120 Ω au multimètre**~~ ✅ FAIT — ajouté
-3. ~~**`uart_set_line_inverse(RXD_INV | TXD_INV)`** dans le composant~~ ✅ FAIT — implémenté comme option `ab_inverted: auto|true|false` (RX+TX couplés, auto-détection au boot, cf. §4quater). Reste à valider sur le matériel une fois le bias réglé.
-4. **Tester si le master répond au scan-reply** avec la correction TX — c'est l'objectif principal depuis le début.
+3. ~~**`uart_set_line_inverse(RXD_INV | TXD_INV)`** dans le composant~~ ✅ FAIT — implémenté comme option `ab_inverted: auto|true|false` (RX+TX couplés, auto-détection au boot, cf. §4quater). Reste à valider sur le matériel.
+4. **Valider la polarité TX via le témoin-oracle** (le witness décode le master clean → nos octets `tx_diag` doivent sortir clean aussi sur le witness), puis **tester si le master répond au scan-reply** avec la correction TX — objectif principal depuis le début.
 5. **`master_addr: 0x90`** — jamais testé, valide sur certains modèles (HAP1-HCP-Adapter selon hgdo). À essayer si le scan-reply reste ignoré.
 6. **Capture Saleae traces** ([blog.bouni.de](https://blog.bouni.de/posts/2018/hoerrmann-uap1/logic-traces.zip)) — timing exact d'un vrai UAP1.
 7. **Module RS485 avec DE et /RE séparés** — pour garder RX actif pendant TX.

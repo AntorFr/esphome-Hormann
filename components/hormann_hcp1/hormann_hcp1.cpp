@@ -69,16 +69,11 @@ void HormannHCP1Component::setup() {
     return;
   }
   uart_param_config(port, &uart_cfg);
-  // If de_pin is provided, wire it as the RTS pin and let ESP-IDF drive it
-  // automatically in RS485 half-duplex mode (precise timing, no truncated bits).
-  int rts = UART_PIN_NO_CHANGE;
-  if (this->de_pin_ != nullptr) {
-    auto *internal = static_cast<InternalGPIOPin *>(this->de_pin_);
-    rts = internal->get_pin();
-  }
-  uart_set_pin(port, this->tx_pin_, this->rx_pin_, rts, UART_PIN_NO_CHANGE);
-  // NOTE: keeping manual DE control (no UART_MODE_RS485_HALF_DUPLEX) — the
-  // automatic mode lowers RTS too early and truncates our TX on the wire.
+  // DE is controlled MANUALLY (see send_frame). Do NOT wire it as the UART RTS pin:
+  // without UART_MODE_RS485_HALF_DUPLEX the driver holds RTS deasserted (HIGH), which
+  // forces the transceiver into TX mode at idle and CLAMPS the whole bus (symptom: 0 RX
+  // on every node, ours and the witness). Manual DE idles LOW (= RX mode) instead.
+  uart_set_pin(port, this->tx_pin_, this->rx_pin_, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
   // --- A/B line polarity -----------------------------------------------
   // A physical A/B swap inverts RX and TX together, so we treat them as one.
@@ -96,7 +91,7 @@ void HormannHCP1Component::setup() {
   uart_set_rx_timeout(port, 1);          // ~0.5 ms gap = end of frame
 
   xTaskCreatePinnedToCore(&HormannHCP1Component::bus_task_trampoline, "hcp1_bus",
-                          4096, this, 23, &this->bus_task_, 1);
+                          8192, this, 23, &this->bus_task_, 1);
 
   ESP_LOGI(TAG, "Hörmann HCP1 ready (TX=%d RX=%d)", this->tx_pin_, this->rx_pin_);
 #else
@@ -116,6 +111,7 @@ void HormannHCP1Component::dump_config() {
                         : (this->ab_inverted_mode_ == AB_INV_ON ? "true" : "false");
   ESP_LOGCONFIG(TAG, "  A/B inverted (RX+TX): %s (active=%s)", ab_mode,
                 this->inversion_active_ ? "yes" : "no");
+  ESP_LOGCONFIG(TAG, "  Sniffer: %s", this->sniffer_ ? "ON (valid frames at INFO)" : "off");
 }
 
 // Combinations to try when auto_scan is enabled. Order = most likely first.
@@ -140,6 +136,11 @@ static constexpr uint32_t AUTO_SCAN_INTERVAL_MS = 15000;  // 15s per combo (~3 m
 // rx_inverted: auto — listen this long, then decide from breaks/errors vs valid frames.
 static constexpr uint32_t POLARITY_WINDOW_MS = 5000;
 static constexpr uint32_t POLARITY_ERROR_THRESHOLD = 20;  // breaks+frame-errs that look "inverted"
+
+// Sniffer mode: periodic stats interval, and how often identical frames re-log.
+static constexpr uint32_t SNIFF_STATS_MS = 10000;
+static constexpr uint32_t SNIFF_REFRESH_MS = 5000;
+static constexpr uint32_t SNIFF_JUNK_MIN_MS = 500;  // rate-limit for junk-byte logging
 
 void HormannHCP1Component::loop() {
   if (this->state_changed_) {
@@ -211,6 +212,27 @@ void HormannHCP1Component::loop() {
       this->tx_diag();
     }
   }
+
+  // Sniffer heartbeat: periodic counts so a wrong-polarity bus (frames arriving
+  // but unparseable = junk) is distinguishable from a dead bus (all zero).
+  if (this->sniffer_) {
+    uint32_t now = millis();
+    if (this->sniff_stats_last_ == 0) {
+      this->sniff_stats_last_ = now;
+    } else if (now - this->sniff_stats_last_ >= SNIFF_STATS_MS) {
+      uint32_t v = this->sniff_valid_ - this->sniff_valid_snap_;
+      uint32_t j = this->sniff_junk_ - this->sniff_junk_snap_;
+      uint32_t e = this->rx_error_count_ >= this->sniff_err_snap_
+                   ? this->rx_error_count_ - this->sniff_err_snap_ : this->rx_error_count_;
+      this->sniff_valid_snap_ = this->sniff_valid_;
+      this->sniff_junk_snap_ = this->sniff_junk_;
+      this->sniff_err_snap_ = this->rx_error_count_;
+      ESP_LOGI(TAG, "sniffer: %u valid, %u junk, %u breaks/errs in %us (ab_inv=%s)",
+               (unsigned) v, (unsigned) j, (unsigned) e, (unsigned) (SNIFF_STATS_MS / 1000),
+               this->inversion_active_ ? "on" : "off");
+      this->sniff_stats_last_ = now;
+    }
+  }
 }
 
 // (Re)apply the UART inversion mask (RXD+TXD together — a single A/B swap
@@ -251,14 +273,18 @@ void HormannHCP1Component::bus_task() {
         break;
       case UART_DATA: {
         int len = uart_read_bytes(port, buf, std::min<int>(event.size, sizeof(buf)), 0);
-        // Log raw bytes like witness uart_debug (same format for easy comparison).
+        // Raw byte dump — VERBOSE only. Building this hex string every chunk from a
+        // priority-23 task is what flooded the logger and faulted core 1, so it is
+        // compiled out below VERBOSE. The sniffer covers normal use.
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
         if (len > 0) {
           char hexbuf[256]; int pos = 0;
           for (int i = 0; i < len && pos < 250; i++)
             pos += snprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X:", buf[i]);
           if (pos > 0) hexbuf[pos - 1] = '\0';
-          ESP_LOGD(TAG, "<<< %s", hexbuf);
+          ESP_LOGV(TAG, "<<< %s", hexbuf);
         }
+#endif
         for (int i = 0; i < len && this->rx_counter_ < sizeof(this->rx_buffer_); i++) {
           this->rx_buffer_[this->rx_counter_++] = buf[i];
         }
@@ -293,12 +319,15 @@ void HormannHCP1Component::bus_task() {
 // where total length = 3 + (cnt|len & 0x0F) and CRC over the whole frame == 0x00.
 void HormannHCP1Component::try_parse_buffered() {
   if (this->rx_counter_ < 4) return;
-  // Log raw RX bytes at DEBUG level to diagnose polarity/framing issues.
+  // Raw RX dump — VERBOSE only (compiled out otherwise; see bus_task note above).
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
   char hexbuf[128]; int pos = 0;
   for (uint8_t i = 0; i < this->rx_counter_ && pos < 120; i++)
     pos += snprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X:", this->rx_buffer_[i]);
   if (pos > 0) hexbuf[pos - 1] = '\0';
-  ESP_LOGD(TAG, "RX[%u]: %s", this->rx_counter_, hexbuf);
+  ESP_LOGV(TAG, "RX[%u]: %s", this->rx_counter_, hexbuf);
+#endif
+  if (this->sniffer_) this->sniff_scan_();
   for (uint8_t off = 0; off + 4 <= this->rx_counter_; off++) {
     uint8_t addr = this->rx_buffer_[off];
     if (addr != BROADCAST_ADDR && addr != this->slave_addr_ && addr != this->master_addr_) continue;
@@ -310,6 +339,90 @@ void HormannHCP1Component::try_parse_buffered() {
     parse_message();
     return;
   }
+}
+
+// Sniffer: read-only pass over the RX buffer. Counts every valid-CRC frame
+// (any address — so the master's address sweep counts as real traffic, not junk)
+// and logs only the ones interesting for us (broadcast / our slave / master).
+void HormannHCP1Component::sniff_scan_() {
+  bool any = false;
+  for (uint8_t off = 0; off + 4 <= this->rx_counter_; off++) {
+    uint8_t total = 3 + (this->rx_buffer_[off + 1] & 0x0F);
+    if (off + total > this->rx_counter_) continue;
+    if (calculate_crc(this->rx_buffer_ + off, total) != 0x00) continue;
+    any = true;
+    this->sniff_valid_++;
+    uint8_t addr = this->rx_buffer_[off];
+    if (addr == BROADCAST_ADDR || addr == this->slave_addr_ || addr == this->master_addr_)
+      this->sniff_log_frame_(this->rx_buffer_ + off, total);
+    off += total - 1;  // skip past this frame
+  }
+  if (!any) {
+    this->sniff_junk_++;  // data present but nothing valid: garbled TX / wrong polarity
+    // Show the unparseable bytes (rate-limited) — this is how we SEE garage-3's reply
+    // landing garbled on the bus: truncated (DE), fragmented (collision) or bad CRC (format).
+    uint32_t now = millis();
+    if (now - this->sniff_junk_log_ms_ >= SNIFF_JUNK_MIN_MS) {
+      this->sniff_junk_log_ms_ = now;
+      char hex[72];
+      int p = 0;
+      for (uint8_t i = 0; i < this->rx_counter_ && p < 68; i++)
+        p += snprintf(hex + p, sizeof(hex) - p, "%02X:", this->rx_buffer_[i]);
+      if (p > 0) hex[p - 1] = '\0'; else hex[0] = '\0';
+      ESP_LOGI(TAG, "SNIFF JUNK[%u]        %s", (unsigned) this->rx_counter_, hex);
+    }
+  }
+}
+
+// Log one valid frame, categorized and de-duplicated. Identical frames (ignoring
+// the rolling counter nibble) are collapsed and re-logged at most every SNIFF_REFRESH_MS.
+void HormannHCP1Component::sniff_log_frame_(const uint8_t *frame, uint8_t length) {
+  uint8_t plen = frame[1] & 0x0F;  // payload length; high nibble of frame[1] = counter (ignored)
+
+  uint8_t key[18];
+  uint8_t kl = 0;
+  key[kl++] = frame[0];
+  key[kl++] = plen;
+  for (uint8_t i = 0; i < plen && kl < sizeof(key); i++) key[kl++] = frame[2 + i];
+
+  uint32_t now = millis();
+  bool same = (kl == this->sniff_last_len_) && (memcmp(key, this->sniff_last_key_, kl) == 0);
+  if (same && (now - this->sniff_last_log_ms_) < SNIFF_REFRESH_MS) {
+    this->sniff_suppressed_++;
+    return;
+  }
+
+  char catbuf[24];
+  const char *cat;
+  uint8_t addr = frame[0];
+  uint8_t cmd = plen >= 1 ? frame[2] : 0xFF;
+  if (addr == BROADCAST_ADDR) {
+    cat = "BCAST";
+  } else if (addr == this->slave_addr_) {
+    if (cmd == CMD_SLAVE_SCAN) cat = "SCAN->us";
+    else if (cmd == CMD_SLAVE_STATUS_REQUEST) cat = "STATUS_REQ->us ***";
+    else { snprintf(catbuf, sizeof(catbuf), "->us cmd=0x%02X", cmd); cat = catbuf; }
+  } else if (addr == this->master_addr_) {
+    cat = "->master";
+  } else {
+    cat = "?";
+  }
+
+  char hex[64];
+  int p = 0;
+  for (uint8_t i = 0; i < length && p < 58; i++)
+    p += snprintf(hex + p, sizeof(hex) - p, "%02X:", frame[i]);
+  if (p > 0) hex[p - 1] = '\0'; else hex[0] = '\0';
+
+  if (this->sniff_suppressed_ > 0)
+    ESP_LOGI(TAG, "SNIFF %-18s %s  (+%u identical)", cat, hex, (unsigned) this->sniff_suppressed_);
+  else
+    ESP_LOGI(TAG, "SNIFF %-18s %s", cat, hex);
+
+  memcpy(this->sniff_last_key_, key, kl);
+  this->sniff_last_len_ = kl;
+  this->sniff_suppressed_ = 0;
+  this->sniff_last_log_ms_ = now;
 }
 
 void HormannHCP1Component::parse_message() {

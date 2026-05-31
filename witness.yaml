@@ -1,6 +1,11 @@
-# RS485 bus witness: dumps every received byte to logs.
-# Use this on a 2nd ESP wired in parallel on A/B of the Hörmann bus,
-# with DE and /RE of the RS485 module tied to GND (RX-only).
+# RS485 bus witness: runs the hormann_hcp1 component in SNIFFER mode (RX-only).
+# Wired in parallel on A/B of the Hörmann bus, with DE and /RE of the RS485 module
+# tied to GND (receiver always on, driver disabled -> the component owns the UART but
+# physically cannot drive the bus).
+# Replaces the old raw uart.debug dump: logs only valid, categorized, de-duplicated
+# frames at INFO ("SNIFF ...") plus a 10 s heartbeat. Also acts as the TX oracle:
+# garage-3's scan-replies (addressed to the master) show up here as "->master" if our
+# TX polarity is correct.
 
 substitutions:
   device_name: hormann-witness
@@ -32,22 +37,22 @@ ota:
   password: !secret ota_password
 
 logger:
-  level: VERBOSE
+  level: INFO   # sniffer logs at INFO; raise to DEBUG for the raw per-byte dump
 
-uart:
-  id: bus_uart
-  rx_pin:
-    number: GPIO18   # RO of RS485 module
-    inverted: true   # Hörmann E3 uses inverted RS485 polarity vs our modules
-  tx_pin: GPIO17     # DI (unused but ESPHome requires both)
-  baud_rate: 19200
-  data_bits: 8
-  parity: NONE
-  stop_bits: 1
-  rx_buffer_size: 512
-  debug:
-    direction: RX
-    dummy_receiver: true
-    after:
-      timeout: 5ms
-      bytes: 64
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ hormann_hcp1 ]
+
+# Passive bus witness. No de_pin: DE/RE are tied to GND on the module, so the
+# component cannot drive the bus even though it owns the UART (RX-only sniffer).
+hormann_hcp1:
+  id: hormann
+  uart_num: 1
+  tx_pin: 17           # DI (unused — driver disabled via DE->GND)
+  rx_pin: 18           # RO of the RS485 module
+  ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false
+  sniffer: true
+  auto_scan: false
+  tx_test: false
