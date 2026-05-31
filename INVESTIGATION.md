@@ -431,10 +431,17 @@ Le master nous scanne, garage-3 répond (`TX took ~4,3 ms`), **mais la réponse 
 
 **Contributeur de latence** : dans `try_parse_buffered`, `sniff_scan_()` fait un `ESP_LOGI` **bloquant** (« SCAN->us », écriture console ~ms) **avant** `send_frame` → retarde la réponse.
 
-### Prochaines étapes (timing TX)
-1. Test isolant : garage-3 `sniffer:false` (bus_task maigre, latence TX minimale) + witness oracle → la réponse atterrit-elle propre ?
-2. Si oui → sortir le logging du `bus_task` (ring-buffer drainé dans `loop()`, non bloquant). Si non → instrumenter le délai scan→réponse, viser la fenêtre exacte du master (§5.B ; refs : raintonr = immédiat, stephan192 = ~3 ms).
-3. Comprendre `TX took 4,3 ms` pour 6 octets (~3,1 ms de data) — l'octet `0x00` de break en tête + le hold 600 µs après `wait_tx_done`.
+### Test isolant (fait) — le logging n'était PAS la cause
+garage-3 `sniffer:false` (latence TX minimale) → **collision persiste** (toujours 2 junk/10 s, aucune réponse propre, RX OK 280 valid). Détail révélateur : sans le délai du log, le junk démarre par `FF`/`FC`/`FE` = **collision dès l'octet 0** (vs `80:92` propres puis octet 3 *avec* le log). → enlever le log nous fait répondre plus tôt et on collisionne dès le début : **on se cale par-dessus le trafic du master quoi qu'il arrive**. (Bonne nouvelle : pas de refactor ring-buffer nécessaire.)
+
+### Conclusion : on répond trop tard → eager-reply
+On répond vraisemblablement seulement sur le **break de la trame suivante** (et non promptement) → on émet pile quand le master repart → collision. Notre réponse fait ~3 ms et le trou inter-trame ~17-40 ms : la place existe, on rate la fenêtre par mauvais déclenchement.
+
+### Décision implémentée : eager-reply + `reply_delay_us`
+- **Eager-reply** : on répond **dès** que le scan/status adressé à nous est complet (détection dans le handler `UART_DATA`), sans attendre le gap/break. Latence minimale.
+- **`reply_delay_us`** (config, défaut 0) : micro-délai busy-wait avant d'émettre, pour **caler** la réponse dans la fenêtre du master (tâtonner par pas : 0, 200, 500 µs…).
+- **Listen-only** : un nœud sans `de_pin` (witness) ne pilote jamais le bus (`send_frame` no-op) → reste un pur sniffer/oracle.
+- À comprendre encore : `TX took ~4 ms` pour 6 octets (~3,1 ms data) — le `0x00` de break + le hold 600 µs après `wait_tx_done`.
 
 ---
 

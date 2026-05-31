@@ -112,6 +112,7 @@ void HormannHCP1Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  A/B inverted (RX+TX): %s (active=%s)", ab_mode,
                 this->inversion_active_ ? "yes" : "no");
   ESP_LOGCONFIG(TAG, "  Sniffer: %s", this->sniffer_ ? "ON (valid frames at INFO)" : "off");
+  ESP_LOGCONFIG(TAG, "  Reply delay: %u us", (unsigned) this->reply_delay_us_);
 }
 
 // Combinations to try when auto_scan is enabled. Order = most likely first.
@@ -273,6 +274,7 @@ void HormannHCP1Component::bus_task() {
         break;
       case UART_DATA: {
         int len = uart_read_bytes(port, buf, std::min<int>(event.size, sizeof(buf)), 0);
+        if (len > 0) this->last_rx_us_ = esp_timer_get_time();  // reply-latency instrumentation
         // Raw byte dump — VERBOSE only. Building this hex string every chunk from a
         // priority-23 task is what flooded the logger and faulted core 1, so it is
         // compiled out below VERBOSE. The sniffer covers normal use.
@@ -288,8 +290,13 @@ void HormannHCP1Component::bus_task() {
         for (int i = 0; i < len && this->rx_counter_ < sizeof(this->rx_buffer_); i++) {
           this->rx_buffer_[this->rx_counter_++] = buf[i];
         }
-        if (event.timeout_flag) {
-          // Inter-frame gap detected -> frame is complete
+        // Eager reply: answer a scan/status addressed to us the instant it is complete,
+        // without waiting for the ~0.5 ms inter-frame timeout that pushes our reply out
+        // of the master's slot. Listen-only nodes (no de_pin) skip this and just sniff.
+        if (this->de_pin_ != nullptr && this->eager_reply_to_us_()) {
+          this->rx_counter_ = 0;
+        } else if (event.timeout_flag) {
+          // Inter-frame gap -> frame complete: full parse (broadcast/state/sniffer).
           try_parse_buffered();
           this->rx_counter_ = 0;
         }
@@ -312,6 +319,26 @@ void HormannHCP1Component::bus_task() {
         break;
     }
   }
+}
+
+// Eager path: as soon as a complete, valid frame addressed to us (scan or status
+// request) is in the buffer, reply immediately — don't wait for the inter-frame gap.
+// Returns true if it replied (caller then clears the buffer).
+bool HormannHCP1Component::eager_reply_to_us_() {
+  for (uint8_t off = 0; off + 4 <= this->rx_counter_; off++) {
+    if (this->rx_buffer_[off] != this->slave_addr_) continue;
+    uint8_t total = 3 + (this->rx_buffer_[off + 1] & 0x0F);
+    if (off + total > this->rx_counter_) continue;          // not fully received yet
+    if (calculate_crc(this->rx_buffer_ + off, total) != 0x00) continue;
+    uint8_t len = this->rx_buffer_[off + 1] & 0x0F;
+    uint8_t cmd = this->rx_buffer_[off + 2];
+    uint8_t counter = (this->rx_buffer_[off + 1] & 0xF0) + 0x10;
+    if (off > 0) memmove(this->rx_buffer_, this->rx_buffer_ + off, total);
+    if (len == 0x02 && cmd == CMD_SLAVE_SCAN) { this->process_slave_scan(counter); return true; }
+    if (len == 0x01 && cmd == CMD_SLAVE_STATUS_REQUEST) { this->process_status_request(counter); return true; }
+    return false;  // a frame to us but not scan/status -> let the full parse handle it
+  }
+  return false;
 }
 
 // Scan the rolling RX buffer for a valid Hörmann frame.
@@ -503,6 +530,16 @@ void HormannHCP1Component::process_status_request(uint8_t counter) {
 
 void HormannHCP1Component::send_frame(uint8_t length) {
 #ifdef USE_ESP_IDF
+  // Listen-only node (no DE pin, e.g. the witness): never drive the bus, and never
+  // block this task on a TX that goes nowhere — otherwise the ~4 ms uart_wait_tx_done
+  // makes it miss/concatenate incoming frames and report false "junk". Pure observer.
+  if (this->de_pin_ == nullptr)
+    return;
+
+  // Configurable micro-delay to slide our reply inside the master's expected window.
+  if (this->reply_delay_us_ > 0)
+    esp_rom_delay_us(this->reply_delay_us_);
+
   uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
 
   int64_t t0 = esp_timer_get_time();
@@ -528,7 +565,8 @@ void HormannHCP1Component::send_frame(uint8_t length) {
   if (this->de_pin_ != nullptr) this->de_pin_->digital_write(this->de_invert_);
   if (this->re_pin_ != nullptr) this->re_pin_->digital_write(false);
   int64_t t1 = esp_timer_get_time();
-  ESP_LOGW(TAG, "TX took %lldus", (long long)(t1 - t0));
+  ESP_LOGW(TAG, "TX took %lldus (reply lat %lldus since last RX byte)",
+           (long long)(t1 - t0), (long long)(t0 - this->last_rx_us_));
 #endif
 }
 

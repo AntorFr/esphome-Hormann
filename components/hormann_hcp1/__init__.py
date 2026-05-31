@@ -24,6 +24,7 @@ CONF_DE_INVERT = 'de_invert'
 CONF_TX_TEST = 'tx_test'
 CONF_AB_INVERTED = 'ab_inverted'
 CONF_SNIFFER = 'sniffer'
+CONF_REPLY_DELAY_US = 'reply_delay_us'
 
 hormann_hcp1_ns = cg.esphome_ns.namespace('hormann_hcp1')
 HormannHCP1Component = hormann_hcp1_ns.class_('HormannHCP1Component', cg.Component)
@@ -46,6 +47,8 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_AB_INVERTED, default='auto'): cv.Any(cv.boolean, cv.one_of('auto', lower=True)),
     # Bus witness: log only valid, categorized, de-duplicated frames (INFO level).
     cv.Optional(CONF_SNIFFER, default=False): cv.boolean,
+    # Micro-delay (us) before sending our reply — tune to land in the master's window.
+    cv.Optional(CONF_REPLY_DELAY_US, default=0): cv.int_range(min=0, max=10000),
 }).extend(cv.COMPONENT_SCHEMA)
 
 
@@ -69,6 +72,7 @@ async def to_code(config):
     cg.add(var.set_ab_inverted_mode(ab_inv_mode))
 
     cg.add(var.set_sniffer(config[CONF_SNIFFER]))
+    cg.add(var.set_reply_delay_us(config[CONF_REPLY_DELAY_US]))
 
     if CONF_DE_PIN in config:
         de_pin = await cg.gpio_pin_expression(config[CONF_DE_PIN])

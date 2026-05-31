@@ -99,6 +99,7 @@ class HormannHCP1Component : public Component {
   void set_tx_test(bool enable) { this->tx_test_ = enable; }
   void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
   void set_sniffer(bool enable) { this->sniffer_ = enable; }
+  void set_reply_delay_us(uint32_t us) { this->reply_delay_us_ = us; }
 
   DoorState get_door_state() const { return this->door_state_; }
   bool is_data_valid() const { return this->door_state_.data_valid; }
@@ -130,6 +131,8 @@ class HormannHCP1Component : public Component {
   bool de_invert_{false};
   bool tx_test_{false};
   uint32_t tx_test_last_{0};
+  uint32_t reply_delay_us_{0};       // micro-delay before TX (eager-reply window tuning)
+  volatile int64_t last_rx_us_{0};   // timestamp of last received byte (reply-latency instr.)
 
   // Line polarity / boot-time auto-detection
   uint8_t ab_inverted_mode_{AB_INV_AUTO};   // AbInvertMode
@@ -181,6 +184,7 @@ class HormannHCP1Component : public Component {
 
   uint8_t calculate_crc(const uint8_t *data, uint8_t length);
   void try_parse_buffered();
+  bool eager_reply_to_us_();  // reply to a complete scan/status addressed to us, ASAP
   void parse_message();
   void process_broadcast(uint8_t length);
   void process_slave_scan(uint8_t counter);
