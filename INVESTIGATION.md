@@ -445,6 +445,30 @@ On répond vraisemblablement seulement sur le **break de la trame suivante** (et
 
 ---
 
+## 4 sexies. Session 2026-05-31 (suite) — TX PROUVÉ PROPRE, le blocage est le timing
+
+### Méthode : isolation par débranchement du moteur
+Pour savoir si notre TX atteint *vraiment* le bus et *proprement*, on a **débranché le moteur** (master) en laissant **garage-3 ↔ witness reliés** sur A/B. Plus de trafic master → ni collision ni flood → on observe notre TX seul, en clair. (Bonus : VERBOSE redevient sûr puisque le bus est calme.)
+
+### Résultat : TX parfait
+`tx_test:true` (garage-3 émet `DE AD BE EF` ×4 toutes les 2 s). Le witness capte **chaque** burst **intact** :
+```
+SNIFF JUNK[17]  DE:AD:BE:EF:DE:AD:BE:EF:DE:AD:BE:EF:DE:AD:BE:EF:00
+```
+12/12 bursts sur 24 s, 0 erreur. `0 valid` (master absent), `5 junk/10s` = exactement nos bursts.
+
+→ **L'hypothèse « TX marginal/faible » est RÉFUTÉE.** SP3485, DE (GPIO4), niveaux, câblage : tout est bon. Tout le garbling vu avec le moteur branché = **100 % des collisions** avec le trafic du master.
+
+### Recadrage
+- Le blocage de la commande n'est **ni** la polarité (RX parfait), **ni** le signal TX (prouvé propre) → c'est **purement le timing** : notre réponse collisionne / rate la fenêtre du master.
+- Le « junk → 0 » de l'eager-reply n'était **pas** une réponse propre, juste l'absence de chevauchement. La réponse collée au scan (~50 µs) ou décalée (`reply_delay_us` 8 ms) n'a jamais été vue proprement côté witness **avec le master branché** → limite d'observation (le log du witness bloque son RX sur des trames trop rapprochées), pas un défaut de TX.
+- Réserve mineure : `tx_diag` part de la task `loop`, la vraie réponse du `bus_task` — mêmes appels UART/GPIO, TX clean dans les deux cas.
+
+### Prochaine étape : caler le timing
+Bouton = **`reply_delay_us`** (déjà implémenté). Plan : rebrancher le moteur, **sweeper** `reply_delay_us` (0 → 500 → 1000 → 2000 → 3000 µs) en guettant côté witness `SNIFF STATUS_REQ->us ***` (escalade du master = succès ; trame *du master*, séparée, donc observable même si notre réponse collée reste dure à voir).
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :
