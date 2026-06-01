@@ -165,6 +165,7 @@ class HormannHCP1Component : public Component {
   uint32_t sniff_stats_last_{0};
   uint32_t sniff_junk_log_ms_{0};     // rate-limit for logging unparseable (junk) buffers
   uint32_t sniff_req_ms_{0};          // witness: ms of last SCAN/STATUS_REQ->us (passive reply-latency)
+  int64_t sniff_prev_log_us_{0};      // witness: esp_timer of previous logged frame (inter-frame Δ)
 
 #ifdef USE_ESP_IDF
   QueueHandle_t uart_queue_{nullptr};

@@ -69,7 +69,7 @@ hormann_hcp1:
   auto_scan: false
   de_invert: false
   tx_test: false        # bus spammer off; TX proven clean (INVESTIGATION 4sexies/septies)
-  bustask_tx_test: false # diagnostic off; drive proven OK, blocker = timing (4septies)
+  bustask_tx_test: false # back to real eager-reply (reply_delay 3800)
   ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false (marking wiring)
   sniffer: false       # lean bus_task; the witness keeps sniffer:true as the oracle
   reply_delay_us: 3800 # MATCH real UAP1: 3.84ms median req->resp latency (Saleae, 4octies)

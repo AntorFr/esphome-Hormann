@@ -475,10 +475,13 @@ void HormannHCP1Component::sniff_log_frame_(const uint8_t *frame, uint8_t length
     p += snprintf(hex + p, sizeof(hex) - p, "%02X:", frame[i]);
   if (p > 0) hex[p - 1] = '\0'; else hex[0] = '\0';
 
+  int64_t nowus = esp_timer_get_time();
+  long long dus = this->sniff_prev_log_us_ ? (nowus - this->sniff_prev_log_us_) : 0;
+  this->sniff_prev_log_us_ = nowus;
   if (this->sniff_suppressed_ > 0)
-    ESP_LOGI(TAG, "SNIFF %-18s %s  (+%u identical)", cat, hex, (unsigned) this->sniff_suppressed_);
+    ESP_LOGI(TAG, "SNIFF d=%6lldus %-18s %s  (+%u identical)", dus, cat, hex, (unsigned) this->sniff_suppressed_);
   else
-    ESP_LOGI(TAG, "SNIFF %-18s %s", cat, hex);
+    ESP_LOGI(TAG, "SNIFF d=%6lldus %-18s %s", dus, cat, hex);
 
   memcpy(this->sniff_last_key_, key, kl);
   this->sniff_last_len_ = kl;

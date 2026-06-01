@@ -551,6 +551,33 @@ Méthode réutilisable : `.logicdata` → CSV (Logic 1.x, requis) → décodeur 
 
 ---
 
+## 4 nonies. Session 2026-06-01 — reply_delay 3800 nécessaire mais PAS suffisant ; mur = drive/biais
+
+`reply_delay_us:3800` implémenté. garage-3 émet bien à **3814 µs** (confirmé, ≡ vrai UAP1). **Mais le maître n'escalade toujours pas** et — via le witness instrumenté (catégories `OUR-SCANRESP<<<` / `OUR-STATUSRESP<<<` + Δµs inter-trame) — **notre réponse n'apparaît JAMAIS sur le bus, maître présent.**
+
+### Comportement du maître AVANT enregistrement (trace bouni startup, t=5.5–8.8 s)
+Le maître découvre par **balayage d'adresses DÉCROISSANT** `0x8C→…→0x28→…`, ~57 ms/adresse, un broadcast `00:..:01:02` entre chaque scan, et **une fenêtre de ~39 ms après chaque scan** (même adresse vide). Dès qu'il scanne `0x28` (1×/balayage ≈ 5.7 s), l'UAP1 répond à 3.9 ms et est enregistré → escalade `status_request`.
+
+### Notre maître (witness, dédup abaissé à 150 ms + Δµs)
+Surtout des **broadcasts `00:..:02:02`** quasi-continus, de **rares** scans `0x28`. Après un `SCAN->us`, le frame suivant arrive **~26 ms plus tard** → **fenêtre de 26 ms**, et **aucun `OUR-SCANRESP` dedans**. Nos 3.8 ms rentrent largement : le timing/marge n'est PAS l'obstacle.
+
+### La contradiction qui désigne le coupable
+| Condition | Notre TX vu au witness |
+|---|---|
+| Maître **absent** (Test A) | ✅ propre (`80:12:14:28:A7`) |
+| Maître présent, TX **en collision** (async, Test B) | ✅ en **junk** (octets mêlés) |
+| Maître présent, TX **propre dans la fenêtre** (eager 3.8 ms) | ❌ **invisible** (ni valide, ni junk) |
+
+Seul modèle cohérent avec les 3 : **drive trop faible / biais fail-safe.** Seul sur le bus → lisible. En collision (maître + nous) → différentiel combiné suffisant → lu en junk. Seul dans la fenêtre mais **biais + terminaison 120 Ω du maître présents** → notre SP3485 3.3 V n'établit pas un différentiel lisible au witness → lu comme **idle = invisible**. (Le « clamp maître éteint » de §4 septies était bien un artefact de diodes ; le drive-faible-face-au-maître-**allumé** est distinct et colle à tout.)
+
+### À faire SUR SITE (non testable à distance)
+- **Oscillo sur A/B pendant notre TX** (maître allumé) : mesurer l'amplitude différentielle réelle quand on émet seul dans la fenêtre.
+- Vérifier **biais fail-safe** (pull-up A / pull-down B) et **terminaison** : la terminaison double (maître + la nôtre ?) ou un biais insuffisant peut écraser notre drive.
+- Pistes correctives : transceiver/alim **5 V**, ajouter/ajuster **résistances de biais**, ou module avec **DE/RE driver plus costaud**.
+- Acquis solides : timing (3.8 ms) correct ; format/break/CRC ≡ vrai UAP1 ; reste **purement la couche physique du TX face au maître allumé**.
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :
