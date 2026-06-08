@@ -100,6 +100,7 @@ class HormannHCP1Component : public Component {
   void set_bustask_tx_test(bool enable) { this->bustask_tx_test_ = enable; }
   void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
   void set_sniffer(bool enable) { this->sniffer_ = enable; }
+  void set_listen_only(bool enable) { this->listen_only_ = enable; }
   void set_reply_delay_us(uint32_t us) { this->reply_delay_us_ = us; }
 
   DoorState get_door_state() const { return this->door_state_; }
@@ -153,6 +154,9 @@ class HormannHCP1Component : public Component {
 
   // Sniffer / bus witness: log only valid, categorized, de-duplicated frames.
   bool sniffer_{false};
+  // Listen-only: drive DE low (receive) but NEVER transmit. For a witness on a board
+  // where DE is on a GPIO (must be held low to receive) rather than hard-wired to GND.
+  bool listen_only_{false};
   uint8_t sniff_last_key_[18]{};      // last logged frame's dedup key (addr+len+payload)
   uint8_t sniff_last_len_{0};
   uint32_t sniff_suppressed_{0};      // identical frames collapsed since last log

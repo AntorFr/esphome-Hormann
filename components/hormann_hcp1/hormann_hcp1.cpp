@@ -268,7 +268,7 @@ void HormannHCP1Component::bus_task() {
     // it lands at random offsets: if NONE reach the witness clean -> drive/loading
     // problem; if some do -> pure timing/collision. Checked each iteration so it fires
     // even when the queue is busy with master frames.
-    if (this->bustask_tx_test_ && this->de_pin_ != nullptr) {
+    if (this->bustask_tx_test_ && this->de_pin_ != nullptr && !this->listen_only_) {
       uint32_t now = millis();
       if (this->bustask_tx_last_ == 0 || now - this->bustask_tx_last_ >= 2000) {
         this->bustask_tx_last_ = now;
@@ -314,7 +314,7 @@ void HormannHCP1Component::bus_task() {
         // Eager reply: answer a scan/status addressed to us the instant it is complete,
         // without waiting for the ~0.5 ms inter-frame timeout that pushes our reply out
         // of the master's slot. Listen-only nodes (no de_pin) skip this and just sniff.
-        if (this->de_pin_ != nullptr && this->eager_reply_to_us_()) {
+        if (this->de_pin_ != nullptr && !this->listen_only_ && this->eager_reply_to_us_()) {
           this->rx_counter_ = 0;
         } else if (event.timeout_flag) {
           // Inter-frame gap -> frame complete: full parse (broadcast/state/sniffer).
@@ -567,10 +567,11 @@ void HormannHCP1Component::process_status_request(uint8_t counter) {
 
 void HormannHCP1Component::send_frame(uint8_t length) {
 #ifdef USE_ESP_IDF
-  // Listen-only node (no DE pin, e.g. the witness): never drive the bus, and never
-  // block this task on a TX that goes nowhere — otherwise the ~4 ms uart_wait_tx_done
-  // makes it miss/concatenate incoming frames and report false "junk". Pure observer.
-  if (this->de_pin_ == nullptr)
+  // Listen-only node (witness): never drive the bus, and never block this task on a TX
+  // that goes nowhere — otherwise the ~4 ms uart_wait_tx_done makes it miss/concatenate
+  // incoming frames and report false "junk". Pure observer. Two flavors: no DE pin
+  // (DE/RE hard-wired to GND), or de_pin present but held low via listen_only.
+  if (this->de_pin_ == nullptr || this->listen_only_)
     return;
 
   // Configurable micro-delay to slide our reply inside the master's expected window.
