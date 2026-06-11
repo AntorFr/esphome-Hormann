@@ -1,14 +1,17 @@
-# Exemple générique — Hörmann HCP1 sur ESP32 + module RS485 NON-isolé (MAX485 / SP3485, avec DE).
-# Émulateur UAP1 : lecture d'état ET commande.
-# Pour la WeAct CAN485 (transceiver ISOLÉ), voir example_can485.yaml.
+# Exemple VALIDÉ — Hörmann HCP1 sur WeAct CAN485 DevBoard (transceiver RS485 ISOLÉ CA-IS2092A).
+# Émulateur UAP1 complet : lecture d'état ET commande (impulse / open / close / light / venting / stop).
 #
-# Câblage : A/B du module sur le bus (DATA+/DATA-). Si rien ne décode -> tester ab_inverted.
-# Un module avec DE (séparé, ou combiné sur un GPIO) est REQUIS pour COMMANDER : le composant
-# pilote DE pour émettre. Un module auto-direction sans DE ne peut que LIRE l'état.
+# ⚠️ CÂBLAGE BUS -> CARTE (A et B INVERSÉS physiquement, cf. ab_inverted) :
+#     bus pin 6  DATA+  ->  borne RS485  B-
+#     bus pin 5  DATA-  ->  borne RS485  A+
+#     bus pin 3  GND    ->  borne RS485  GND (Mass)
+#   Switches carte : PUPD = OFF, terminaison 120 Ω = OFF (le maître biaise/termine déjà).
+#   Pourquoi l'inversion : le fail-safe du transceiver isolé lit le bus Hörmann (qui drive
+#   asymétrique) comme idle -> inverser A/B le réveille. Détails : investigation/README.md
 
 substitutions:
-  name: hormann-garage
-  friendly_name: "Hörmann Garage"
+  name: hormann-can485
+  friendly_name: "Hörmann CAN485"
 
 esphome:
   name: ${name}
@@ -43,18 +46,36 @@ external_components:
   - source:
       type: local
       path: components
-    components: [ hormann_hcp1 ]
+    components: [ hormann_hcp1, status_led_rgb ]
 
 hormann_hcp1:
   id: hormann
   uart_num: 1
-  tx_pin: GPIO17       # DI du module RS485
-  rx_pin: GPIO16       # RO du module RS485
-  de_pin: GPIO4        # DE (actif-haut) — REQUIS pour émettre/commander
-  # re_pin: GPIO5      # si /RE est sur un GPIO séparé (sinon combiné / à GND)
-  ab_inverted: auto    # off | true | auto — auto-détecte la polarité A/B au boot
+  tx_pin: GPIO22       # DI
+  rx_pin: GPIO21       # RO
+  de_pin: GPIO17       # DE (actif-haut)
+  ab_inverted: true    # A/B inversés physiquement -> ré-inversion logicielle RX+TX
   reply_delay_us: 3800 # latence de réponse calée sur un vrai UAP1 (~3.84 ms)
   sniffer: false       # true = logger les trames du bus (debug)
+
+light:
+  # WS2812 onboard (GPIO4) -> indicateur d'état via status_led_rgb (vert=OK/orange=warn/rouge=err)
+  - platform: esp32_rmt_led_strip
+    id: status_strip
+    internal: true
+    pin: GPIO4
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+  - platform: hormann_hcp1
+    id: garage_light
+    name: "Garage Light"
+    hormann_hcp1_id: hormann
+
+status_led_rgb:
+  light_id: status_strip
 
 cover:
   - platform: hormann_hcp1
@@ -62,12 +83,6 @@ cover:
     name: "Garage Door"
     hormann_hcp1_id: hormann
     device_class: garage
-
-light:
-  - platform: hormann_hcp1
-    id: garage_light
-    name: "Garage Light"
-    hormann_hcp1_id: hormann
 
 binary_sensor:
   - platform: hormann_hcp1
