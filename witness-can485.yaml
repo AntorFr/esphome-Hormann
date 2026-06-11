@@ -73,5 +73,3 @@ hormann_hcp1:
   sniffer: true        # oracle: trames valides catégorisées + junk + Δµs
   ab_inverted: auto    # auto-détection polarité au boot
   auto_scan: false
-  tx_test: false
-  bustask_tx_test: false

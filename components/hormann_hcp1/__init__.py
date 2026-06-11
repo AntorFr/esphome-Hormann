@@ -21,8 +21,6 @@ CONF_MASTER_ADDR = 'master_addr'
 CONF_SLAVE_TYPE = 'slave_type'
 CONF_AUTO_SCAN = 'auto_scan'
 CONF_DE_INVERT = 'de_invert'
-CONF_TX_TEST = 'tx_test'
-CONF_BUSTASK_TX_TEST = 'bustask_tx_test'
 CONF_AB_INVERTED = 'ab_inverted'
 CONF_SNIFFER = 'sniffer'
 CONF_LISTEN_ONLY = 'listen_only'
@@ -43,9 +41,6 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_SLAVE_TYPE, default=0x14): cv.hex_uint8_t,
     cv.Optional(CONF_AUTO_SCAN, default=False): cv.boolean,
     cv.Optional(CONF_DE_INVERT, default=False): cv.boolean,
-    cv.Optional(CONF_TX_TEST, default=False): cv.boolean,
-    # Test A: fire the real scan-reply from the bus_task context on an idle timeout.
-    cv.Optional(CONF_BUSTASK_TX_TEST, default=False): cv.boolean,
     # A/B polarity (applies to RX and TX together — one differential pair):
     # false/true to force, or 'auto' to detect at boot (default).
     cv.Optional(CONF_AB_INVERTED, default='auto'): cv.Any(cv.boolean, cv.one_of('auto', lower=True)),
@@ -70,8 +65,6 @@ async def to_code(config):
     cg.add(var.set_slave_type(config[CONF_SLAVE_TYPE]))
     cg.add(var.set_auto_scan(config[CONF_AUTO_SCAN]))
     cg.add(var.set_de_invert(config[CONF_DE_INVERT]))
-    cg.add(var.set_tx_test(config[CONF_TX_TEST]))
-    cg.add(var.set_bustask_tx_test(config[CONF_BUSTASK_TX_TEST]))
 
     # ab_inverted: 0 = off, 1 = on, 2 = auto-detect (applies to RX and TX)
     ab_inv = config[CONF_AB_INVERTED]

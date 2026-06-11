@@ -55,21 +55,19 @@ external_components:
     components: [ hormann_hcp1, status_led_rgb ]
 
 # Hörmann HCP1 sur le transceiver isolé CA-IS2092A de la WeAct CAN485.
+# Câblage bus: pin6 DATA+ -> borne B-, pin5 DATA- -> borne A+ (A/B INVERSÉS physiquement,
+# cf. ab_inverted), pin3 GND -> Mass. PUPD OFF.
 hormann_hcp1:
   id: hormann
   uart_num: 1
-  tx_pin: GPIO22      # DI  (ESP -> bus)
-  rx_pin: GPIO21          # RO  (bus -> ESP)
-  de_pin: GPIO17      # DE  (driver enable, actif-haut)
+  tx_pin: GPIO22       # DI  (ESP -> bus)
+  rx_pin: GPIO21       # RO  (bus -> ESP)
+  de_pin: GPIO17       # DE  (driver enable, actif-haut)
   # re_pin non requis: /RE géré par la carte (combiné/à GND)
-  #de_invert: false    # DE actif-haut -> haut=TX, bas=RX
-  #listen_only: true    # DEBUG: force DE bas en permanence (test RX pur)
-  ab_inverted: true    # A/B inversés physiquement (swap obligatoire pour réveiller le RX du CA-IS2092A) -> on ré-inverse en logiciel
-  auto_scan: false
-  #tx_test: false
-  #bustask_tx_test: false
-  sniffer: true        # DEBUG temporaire: log continu des trames (valides/junk/breaks)
-  reply_delay_us: 3800 # latence réponse calée sur un vrai UAP1 (3.84 ms, INVESTIGATION 4octies)
+  ab_inverted: true    # A/B inversés PHYSIQUEMENT (swap obligatoire pour réveiller le RX du
+                       # transceiver isolé CA-IS2092A) -> ré-inversion logicielle RX+TX
+  reply_delay_us: 3800 # latence de réponse calée sur un vrai UAP1 (~3.84 ms)
+  sniffer: false       # true = logger les trames du bus (debug)
 
 
 cover:

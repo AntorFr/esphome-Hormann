@@ -57,4 +57,3 @@ hormann_hcp1:
                        # (l'oubli d'origine: sans ça le witness émettait sa propre scan-réponse eager ~400µs -> 2e répondeur sur le bus)
   sniffer: true
   auto_scan: false
-  tx_test: false

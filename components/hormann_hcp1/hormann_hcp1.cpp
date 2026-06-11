@@ -206,14 +206,6 @@ void HormannHCP1Component::loop() {
     }
   }
 
-  if (this->tx_test_) {
-    uint32_t now = millis();
-    if (this->tx_test_last_ == 0 || now - this->tx_test_last_ > 2000) {
-      this->tx_test_last_ = now;
-      this->tx_diag();
-    }
-  }
-
   // Sniffer heartbeat: periodic counts so a wrong-polarity bus (frames arriving
   // but unparseable = junk) is distinguishable from a dead bus (all zero).
   if (this->sniffer_) {
@@ -262,28 +254,7 @@ void HormannHCP1Component::bus_task() {
   uint8_t buf[64];
 
   for (;;) {
-    // Test A/B (drive vs timing): fire the EXACT scan-reply frame from THIS task on a
-    // 2s WALL-CLOCK timer — async to the master's traffic — via the same send_frame()
-    // path. With the master OFF it lands in the clear (drive proof); with the master ON
-    // it lands at random offsets: if NONE reach the witness clean -> drive/loading
-    // problem; if some do -> pure timing/collision. Checked each iteration so it fires
-    // even when the queue is busy with master frames.
-    if (this->bustask_tx_test_ && this->de_pin_ != nullptr && !this->listen_only_) {
-      uint32_t now = millis();
-      if (this->bustask_tx_last_ == 0 || now - this->bustask_tx_last_ >= 2000) {
-        this->bustask_tx_last_ = now;
-        this->tx_buffer_[0] = this->master_addr_;
-        this->tx_buffer_[1] = 0x02 | 0x10;
-        this->tx_buffer_[2] = this->slave_type_;
-        this->tx_buffer_[3] = this->slave_addr_;
-        this->tx_buffer_[4] = calculate_crc(this->tx_buffer_, 4);
-        ESP_LOGW(TAG, "BUSTASK-TX-TEST: firing scan-reply (80:%02X:%02X:%02X) from bus_task",
-                 this->tx_buffer_[1], this->slave_type_, this->slave_addr_);
-        send_frame(5);
-      }
-    }
-    TickType_t wait = this->bustask_tx_test_ ? pdMS_TO_TICKS(200) : portMAX_DELAY;
-    if (xQueueReceive(this->uart_queue_, &event, wait) != pdTRUE) {
+    if (xQueueReceive(this->uart_queue_, &event, portMAX_DELAY) != pdTRUE) {
       continue;
     }
     switch (event.type) {
@@ -296,18 +267,6 @@ void HormannHCP1Component::bus_task() {
       case UART_DATA: {
         int len = uart_read_bytes(port, buf, std::min<int>(event.size, sizeof(buf)), 0);
         if (len > 0) this->last_rx_us_ = esp_timer_get_time();  // reply-latency instrumentation
-        // Raw byte dump — VERBOSE only. Building this hex string every chunk from a
-        // priority-23 task is what flooded the logger and faulted core 1, so it is
-        // compiled out below VERBOSE. The sniffer covers normal use.
-#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
-        if (len > 0) {
-          char hexbuf[256]; int pos = 0;
-          for (int i = 0; i < len && pos < 250; i++)
-            pos += snprintf(hexbuf + pos, sizeof(hexbuf) - pos, "%02X:", buf[i]);
-          if (pos > 0) hexbuf[pos - 1] = '\0';
-          ESP_LOGV(TAG, "<<< %s", hexbuf);
-        }
-#endif
         for (int i = 0; i < len && this->rx_counter_ < sizeof(this->rx_buffer_); i++) {
           this->rx_buffer_[this->rx_counter_++] = buf[i];
         }
@@ -632,28 +591,6 @@ void HormannHCP1Component::trigger_action(HormannAction action) {
     case ACTION_IMPULSE: this->slave_response_data_ = RESPONSE_IMPULSE; break;
     default: break;
   }
-}
-
-void HormannHCP1Component::tx_diag() {
-#ifdef USE_ESP_IDF
-  uart_port_t port = static_cast<uart_port_t>(this->uart_num_);
-  // Recognizable marker pattern: 0xDE 0xAD 0xBE 0xEF repeated.
-  uint8_t buf[16];
-  for (int i = 0; i < 16; i += 4) { buf[i] = 0xDE; buf[i+1] = 0xAD; buf[i+2] = 0xBE; buf[i+3] = 0xEF; }
-
-  // Raise DE BEFORE writing (manual control — same as send_frame).
-  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(true);
-  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(!this->de_invert_);
-  esp_rom_delay_us(20);
-
-  uart_write_bytes(port, buf, 16);
-  uart_wait_tx_done(port, pdMS_TO_TICKS(100));
-  esp_rom_delay_us(600);  // hold DE for the last byte's shift-out
-
-  if (this->de_pin_ != nullptr) this->de_pin_->digital_write(this->de_invert_);
-  if (this->re_pin_ != nullptr) this->re_pin_->digital_write(false);
-  ESP_LOGW(TAG, "TX DIAG: sent 16 bytes (DE/RE toggled)");
-#endif
 }
 
 #endif  // USE_ESP_IDF

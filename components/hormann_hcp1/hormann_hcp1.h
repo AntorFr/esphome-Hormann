@@ -96,8 +96,6 @@ class HormannHCP1Component : public Component {
   void set_slave_type(uint8_t type) { this->slave_type_ = type; }
   void set_auto_scan(bool enable) { this->auto_scan_ = enable; }
   void set_de_invert(bool inv) { this->de_invert_ = inv; }
-  void set_tx_test(bool enable) { this->tx_test_ = enable; }
-  void set_bustask_tx_test(bool enable) { this->bustask_tx_test_ = enable; }
   void set_ab_inverted_mode(uint8_t mode) { this->ab_inverted_mode_ = mode; }
   void set_sniffer(bool enable) { this->sniffer_ = enable; }
   void set_listen_only(bool enable) { this->listen_only_ = enable; }
@@ -114,7 +112,6 @@ class HormannHCP1Component : public Component {
   void toggle_light() { trigger_action(ACTION_TOGGLE_LIGHT); }
   void impulse() { trigger_action(ACTION_IMPULSE); }
   void emergency_stop() { trigger_action(ACTION_EMERGENCY_STOP); }
-  void tx_diag();  // Diagnostic: forces DE high and sends 0xAA repeatedly
 
   void add_on_state_callback(std::function<void()> callback) {
     this->state_callback_.add(std::move(callback));
@@ -131,12 +128,6 @@ class HormannHCP1Component : public Component {
   uint8_t slave_type_{UAP1_TYPE};
   bool auto_scan_{false};
   bool de_invert_{false};
-  bool tx_test_{false};
-  uint32_t tx_test_last_{0};
-  // Test A/B: fire the real scan-reply from the bus_task context (not loop()) on a
-  // 2s wall-clock timer — async to master traffic — to discriminate drive vs timing.
-  bool bustask_tx_test_{false};
-  uint32_t bustask_tx_last_{0};
   uint32_t reply_delay_us_{0};       // micro-delay before TX (eager-reply window tuning)
   volatile int64_t last_rx_us_{0};   // timestamp of last received byte (reply-latency instr.)
 
