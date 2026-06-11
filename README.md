@@ -2,6 +2,11 @@
 
 Composant ESPHome pour contrôler les portes de garage Hörmann via le protocole HCP1.
 
+✅ **Statut : émulateur UAP1 complet et fonctionnel** — lecture d'état **ET** commande
+(impulse / open / close / light / venting / stop). Validé de bout en bout sur une **WeAct
+CAN485** (transceiver RS485 isolé). Voir [`investigation/README.md`](investigation/README.md)
+pour le retour d'expérience (pièges, mesures, ce qui a marché).
+
 ⚠️ **UTILISEZ À VOS PROPRES RISQUES !** Ce projet interagit directement avec le moteur de votre porte de garage.
 
 ## Matériel requis
@@ -14,11 +19,14 @@ Composant ESPHome pour contrôler les portes de garage Hörmann via le protocole
 
 ### ⚠️ Note importante sur les modules RS485
 
-> **Les modules RS485 "auto-direction" (HW-519 4 pins) ne semblent PAS fonctionner avec le protocole HCP1 Hörmann.**
+> **Pour COMMANDER la porte, il faut un module avec contrôle de direction DE.**
 >
-> Le protocole HCP1 nécessite un contrôle précis du timing TX/RX et l'envoi d'un "sync break" qui requiert un changement de baud rate pendant la transmission. Les modules auto-direction ne permettent pas ce contrôle.
+> Le composant pilote la broche **DE** pour émettre (et génère le « sync break » long requis par
+> le maître, via un baud-switch à 9600 — c'est implémenté). Un module **auto-direction** (HW-519
+> 4 pins, sans DE) ne permet **que la LECTURE** de l'état : le composant n'émet pas sans `de_pin`.
 >
-> **Utilisez un module avec contrôle manuel DE/RE, EN ou RTS.** (à confirmer)
+> Modules conseillés : **MAX3485 / SP3485 / ST485** (avec DE/RE), ou un module **CAN+RS485 isolé**
+> (ex. WeAct CAN485). Pour un transceiver **isolé**, lire la section dédiée ci-dessous (inversion A/B).
 
 ### Connexion au moteur Hörmann
 
@@ -143,6 +151,40 @@ Le moteur Hörmann dispose d'un connecteur avec le brochage suivant :
 * Uniquement pour modules avec contrôle DE/RE
 ```
 
+### Option 3 : Transceiver RS485 ISOLÉ (ex. WeAct CAN485 — CA-IS2092A) ✅ Validé
+
+Les transceivers RS485 **isolés** ont un **fail-safe interne agressif**. Or le bus Hörmann drive
+de façon **asymétrique** (DATA+ swingue, DATA- reste près de GND) : le récepteur isolé lit le
+niveau « espace » faible comme idle et **ne décode rien** (0 trame, 0 break), là où un
+transceiver **non-isolé** décode normalement sur les mêmes fils.
+
+**Solution : inverser PHYSIQUEMENT A et B**, et compenser en logiciel avec `ab_inverted: true`.
+
+```
+Bus Hörmann              WeAct CAN485 (bornier RS485)
+┌──────────────┐         ┌───────────────────────────┐
+│ pin 6  DATA+  ├─────────┤ B-   (inversé !)           │
+│ pin 5  DATA-  ├─────────┤ A+   (inversé !)           │
+│ pin 3  GND    ├─────────┤ GND  (Mass)                │
+└──────────────┘         └───────────────────────────┘
+   Switches carte : PUPD = OFF, terminaison 120 Ω = OFF (le maître biaise/termine déjà)
+   Pinout WeAct : DI(TX)=GPIO22, RO(RX)=GPIO21, DE=GPIO17, WS2812=GPIO4
+```
+
+```yaml
+hormann_hcp1:
+  id: hormann
+  uart_num: 1
+  tx_pin: GPIO22       # DI
+  rx_pin: GPIO21       # RO
+  de_pin: GPIO17       # DE
+  ab_inverted: true    # A/B inversés physiquement -> ré-inversion logicielle RX+TX
+  reply_delay_us: 3800 # latence de réponse calée sur un vrai UAP1 (~3.84 ms)
+```
+
+> Config complète : [example_can485.yaml](example_can485.yaml). Le « pourquoi » détaillé (mesures
+> au scope, diagnostic) : [investigation/README.md](investigation/README.md).
+
 ## Installation
 
 ### Option 1 : Depuis GitHub (Recommandé)
@@ -247,10 +289,13 @@ hormann_hcp1:
 - **`false`** : aucune inversion.
 
 > 💡 Si après inversion automatique il n'y a toujours aucune trame, ce n'est **pas** une simple inversion A/B : vérifier le câblage et surtout la **polarisation fail-safe** du bus (résistances de bias), en particulier si une terminaison 120 Ω est présente.
+>
+> 💡 **Transceiver ISOLÉ** (ex. CA-IS2092A) : le mode `auto` ne détectera **rien** (0 break, 0 trame). Il faut **inverser PHYSIQUEMENT A et B** sur le bornier **et** mettre `ab_inverted: true` (cf. Option 3). PUPD = OFF.
 
 ### Configuration complète
 
-Voir [example_hcp1.yaml](example_hcp1.yaml) pour un exemple complet avec tous les capteurs et boutons.
+- [example_hcp1.yaml](example_hcp1.yaml) — module RS485 **non-isolé** générique (MAX485/SP3485).
+- [example_can485.yaml](example_can485.yaml) — **WeAct CAN485** (transceiver isolé, A/B inversés) — **config validée**.
 
 ## Entités Home Assistant
 
@@ -300,12 +345,32 @@ Le composant émule un module UAP1 Hörmann pour communiquer avec le moteur.
 | Toggle Light | Basculer l'éclairage |
 | Emergency Stop | Arrêt d'urgence |
 
+### Enregistrement & commande (le « sync break »)
+
+Pour être **enregistré** (et donc pouvoir commander), le composant doit, en réponse au scan du
+maître, émettre une trame précédée d'un **sync break suffisamment long** (~920 µs, comme un vrai
+UAP1). Le composant le génère en envoyant le `0x00` de tête à **9600 baud** puis la trame à 19200.
+Sans ça, le maître scanne en boucle **sans jamais escalader** vers `status_request` → la commande
+est ignorée. La latence de réponse est réglable via `reply_delay_us` (défaut adapté : `3800`,
+calé sur un vrai UAP1 ~3,84 ms). Le timing n'a pas besoin d'être précis à la µs.
+
 ## Dépannage
 
-### La porte ne répond pas
-1. Vérifier le câblage RS485 — A/B peuvent être inversés. Le composant tente une **auto-détection** (`ab_inverted: auto`). Si rien n'est décodé même après inversion auto, suspecter la **polarisation fail-safe** du bus (bias) plutôt que la simple polarité.
-2. Vérifier que le GND est connecté
-3. Activer le mode DEBUG dans les logs ESPHome
+### Rien n'est décodé (0 trame côté lecture)
+1. A/B peut-être inversés → `ab_inverted: auto` (ou `true`). Si **0 break / 0 trame** sur un
+   transceiver **isolé** : inverser **physiquement** A/B sur le bornier + `ab_inverted: true`,
+   PUPD = OFF (cf. Option 3).
+2. Vérifier que le **GND** est connecté.
+3. Activer `sniffer: true` (ou logs DEBUG) pour voir les trames du bus.
+
+### La lecture marche mais la commande est ignorée
+Le maître **scanne** notre adresse mais **n'escalade jamais** vers `status_request` (donc on
+n'est pas enregistré) :
+1. Il faut un **`de_pin`** (le composant n'émet pas sans → lecture seule).
+2. Le **sync break** doit être assez long (~920 µs) — c'est géré par le composant ; vérifier
+   `reply_delay_us: 3800`.
+3. `sniffer: true` : si tu vois passer des **`STATUS_REQ->us`**, c'est **gagné** (enregistré).
+4. Un seul répondeur sur l'adresse 0x28 (couper tout 2ᵉ émulateur/witness non passif).
 
 ### Erreur 7 sur le moteur
 L'erreur 7 indique que le moteur ne reçoit pas de réponse du "slave" (UAP1). Vérifiez :
@@ -334,7 +399,10 @@ Ce composant a été développé pour les moteurs Hörmann utilisant le protocol
 
 ## Références
 
-- [hoermann_door par stephan192](https://github.com/stephan192/hoermann_door) - Projet de référence
+- [`investigation/README.md`](investigation/README.md) - **Retour d'expérience** : les 2 pièges
+  (swap A/B sur isolé, sync break), les fausses pistes, et les outils (décodeur Saleae).
+- [hoermann_door par stephan192](https://github.com/stephan192/hoermann_door) - Projet de référence (PIC16 + ESP)
+- [hgdo par steff393](https://github.com/steff393/hgdo) - ESP8266 + SoftwareSerial (timing ms, break long)
 - [Blog Bouni - Hörmann UAP1](https://blog.bouni.de/posts/2018/hoerrmann-uap1/) - Reverse engineering du protocole
 
 ## License
