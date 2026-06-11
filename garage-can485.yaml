@@ -15,6 +15,9 @@ esp32:
   board: esp32dev
   framework:
     type: esp-idf
+    advanced:
+      minimum_chip_revision: 3.1
+      sram1_as_iram: true 
 
 wifi:
   ssid: !secret wifi_ssid
@@ -49,23 +52,25 @@ external_components:
   - source:
       type: local
       path: components
-    components: [ hormann_hcp1 ]
+    components: [ hormann_hcp1, status_led_rgb ]
 
 # Hörmann HCP1 sur le transceiver isolé CA-IS2092A de la WeAct CAN485.
 hormann_hcp1:
   id: hormann
   uart_num: 1
-  tx_pin: 22          # DI  (ESP -> bus)
-  rx_pin: 21          # RO  (bus -> ESP)
+  tx_pin: GPIO22      # DI  (ESP -> bus)
+  rx_pin: GPIO21          # RO  (bus -> ESP)
   de_pin: GPIO17      # DE  (driver enable, actif-haut)
   # re_pin non requis: /RE géré par la carte (combiné/à GND)
-  de_invert: false    # DE actif-haut -> haut=TX, bas=RX
-  ab_inverted: auto   # auto-détection polarité A/B (RX+TX) au boot
+  #de_invert: false    # DE actif-haut -> haut=TX, bas=RX
+  #listen_only: true    # DEBUG: force DE bas en permanence (test RX pur)
+  ab_inverted: true    # A/B inversés physiquement (swap obligatoire pour réveiller le RX du CA-IS2092A) -> on ré-inverse en logiciel
   auto_scan: false
-  tx_test: false
-  bustask_tx_test: false
-  sniffer: false
+  #tx_test: false
+  #bustask_tx_test: false
+  sniffer: true        # DEBUG temporaire: log continu des trames (valides/junk/breaks)
   reply_delay_us: 3800 # latence réponse calée sur un vrai UAP1 (3.84 ms, INVESTIGATION 4octies)
+
 
 cover:
   - platform: hormann_hcp1
@@ -75,10 +80,25 @@ cover:
     device_class: garage
 
 light:
+  - platform: esp32_rmt_led_strip
+    id: status_strip
+    internal: true
+    pin: GPIO4
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+
   - platform: hormann_hcp1
     id: garage_light
     name: "Garage Light"
     hormann_hcp1_id: hormann
+
+# Indicateur d'état type `status_led` mais en couleur sur la WS2812 :
+#   fixe vert = OK, clignotement lent orange = warning, rapide rouge = erreur.
+status_led_rgb:
+  light_id: status_strip
 
 binary_sensor:
   - platform: hormann_hcp1

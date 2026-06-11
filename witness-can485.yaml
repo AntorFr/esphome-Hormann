@@ -41,7 +41,24 @@ external_components:
   - source:
       type: local
       path: components
-    components: [ hormann_hcp1 ]
+    components: [ hormann_hcp1, status_led_rgb ]
+
+light:
+  # WS2812 onboard (GPIO4) pilotée par le composant status_led_rgb ci-dessous.
+  - platform: esp32_rmt_led_strip
+    id: status_strip
+    internal: true
+    pin: GPIO4
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+
+# Indicateur d'état type `status_led` mais en couleur sur la WS2812 :
+#   fixe vert = OK, clignotement lent orange = warning, rapide rouge = erreur.
+status_led_rgb:
+  light_id: status_strip
 
 # Witness/oracle: décode tout le bus, ne pilote jamais, flag OUR-SCANRESP<<< quand
 # il voit NOTRE réponse (80:..:14:28 / 0x29) + Δµs inter-trame.

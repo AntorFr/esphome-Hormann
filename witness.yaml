@@ -53,6 +53,8 @@ hormann_hcp1:
   tx_pin: 17           # DI (unused — driver disabled via DE->GND)
   rx_pin: 18           # RO of the RS485 module
   ab_inverted: false   # polarity confirmed: valid CRCs at inverted:false
+  listen_only: true    # ORACLE VRAIMENT PASSIF: ne répond JAMAIS aux scans 0x28
+                       # (l'oubli d'origine: sans ça le witness émettait sa propre scan-réponse eager ~400µs -> 2e répondeur sur le bus)
   sniffer: true
   auto_scan: false
   tx_test: false

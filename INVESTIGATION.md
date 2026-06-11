@@ -578,6 +578,104 @@ Seul modèle cohérent avec les 3 : **drive trop faible / biais fail-safe.** Seu
 
 ---
 
+## 4 decies. Session 2026-06-10 — WeAct CAN485 (CA-IS2092A isolé) : RX muet (défaut carte) + le **PUPD** perturbe tout le bus
+
+Migration sur la **WeAct CAN485 DevBoard** (transceiver RS485 **isolé CA-IS2092A**), config `garage-can485`. Au départ, RX **muet : `0 valid, 0 junk, 0 breaks/errs`** en continu, alors que le **vieux witness SP3485, branché sur les MÊMES fils A/B/GND**, décode **282 trames valides** (`ab_inv=off`, scans `28:82:01:80:06`, BCAST, replies). → bus + polarité + masse **innocentés**, le défaut est dans la carte isolée.
+
+### Deux constats DISTINCTS (à ne pas confondre)
+**1. Le switch PUPD perturbe le bus ENTIER.** PUPD = biais pull-up A / pull-down B de la WeAct. **PUPD ON → même le vieux witness ne voit plus rien** (0 trame). Le biais ajouté par la WeAct **clampe le différentiel pour TOUS les écouteurs du segment**, pas que pour elle. → **PUPD doit rester OFF** : le maître Hörmann biaise déjà ; un 2e point de biais (surtout côté isolé) écrase la ligne.
+
+**2. Même PUPD OFF, la WeAct ne reçoit toujours RIEN.** PUPD OFF : witness = **trames OK**, **WeAct = 0/0/0**, sur les mêmes fils. → **le PUPD n'est PAS la cause du RX muet de la WeAct** — c'est un effet séparé. La WeAct a un **défaut propre de chemin de réception** (côté transceiver isolé), indépendant du PUPD et **toujours non résolu**.
+
+### Règle pratique (carte WeAct CAN485 sur bus Hörmann)
+- **PUPD : OFF** (le maître biaise déjà — PUPD ON **clampe le bus pour TOUS les écouteurs**, witness compris). N'affecte PAS le défaut RX propre de la WeAct (cf. constat 2).
+- **Terminaison 120 Ω de la carte : NEUTRE côté RX/sniffer** — mesuré : l'ajouter ou non **ne perturbe rien** en réception. ⇒ la dissymétrie observée vient **du PUPD seul, pas de la 120 Ω**. (La précaution « 120 Ω OFF » reste pertinente uniquement pour le **drive TX** face au maître, cf. §4 nonies — pas pour écouter.)
+- Masse bus (GND) **reliée** (RS485 3 fils A/B/GND) — nécessaire côté isolé.
+
+### Tests écartés au passage (même session)
+- **`listen_only` (DE forcé bas)** → toujours 0/0/0 : **DE n'était pas le coupable.**
+- **Polarité** : `ab_inv=off` est la **bonne** (witness le prouve) — surtout pas `true`.
+- **Cause du 0/0/0 WeAct : RÉSOLUE** (cf. ci-dessous) = drive bus asymétrique + fail-safe du CA-IS2092A → **swap physique A/B + `ab_inverted: true`**.
+
+> ⚠️ Correction d'une hypothèse intermédiaire : le **PUPD n'explique PAS** le RX muet de la WeAct (muette aussi PUPD OFF, alors que le witness reçoit sur les mêmes fils). PUPD = **nuisance bus à laisser OFF** ; le RX muet de la WeAct est un **défaut distinct** (résolu ci-dessous).
+
+### ✅ RÉSOLU — swap physique A/B + `ab_inverted: true`
+
+**Diagnostic final au scope** (réf. GND_ISO, bus actif) : ce bus Hörmann drive **asymétrique** — **DATA+ (pin 6) fait tout le swing** (−0,4 → +3,2 V), **DATA- (pin 5) reste collé à GND** (~0 V, plat). Le différentiel A−B existe (porté par A) → le **SP3485 non-isolé le décode**. Mais le **CA-IS2092A isolé, avec son fail-safe intégré plus agressif, lit le niveau « espace » faible (−0,4 V) comme idle permanent → RO figé → 0/0/0**. (Alim isolée `VDD5V_ISO` = 5 V mesurée OK, pins/enable OK, code OK confirmé via **raw UART** : tout était bon sauf ça.)
+
+**Fix** : **inverser physiquement A et B** à l'entrée de la WeAct → met le swing fort côté « espace », le récepteur accroche. RO sort alors des octets **logiquement inversés** → compenser avec **`ab_inverted: true`**.
+
+**Preuve** : raw UART après swap = flot d'octets au rythme du bus (inversés) ; puis `hormann_hcp1` `ab_inverted: true` → `sniffer: 280 valid, 0 junk (ab_inv=on)` + TX émis. **RX à parité avec le witness.** ✅
+
+**Câblage WeAct CAN485 ↔ bus Hörmann (HCP1) :**
+| Bus Hörmann | Borne WeAct | Note |
+|---|---|---|
+| pin 6 DATA+ (A) | **B-** | **inversé** |
+| pin 5 DATA- (B) | **A+** | **inversé** |
+| pin 3 GND | Mass (GND_ISO) | continuité confirmée vers GND moteur |
+
++ config `ab_inverted: true`, **PUPD OFF**, terminaison 120 Ω indifférente côté RX. Le witness SP3485 (non-isolé) reste, lui, en **câblage normal + `ab_inverted: false`**.
+
+---
+
+## 4 undecies. Session 2026-06-11 — analyse trace vrai UAP1 + comparaison stephan192 : notre protocole est byte-perfect
+
+RX **résolu** (§4 decies) → attaque de la **commande**. Décodage de la trace Saleae d'un **vrai UAP1** (`track_analyse/UAP1-startup.csv`, script `track_analyse/decode_uart.py` : décode 19200 8N1, canal TX=UAP1 idle-haut).
+
+### Ce que fait un vrai UAP1 (trace décodée)
+| t | trame UAP1 (TX) | sens |
+|---|---|---|
+| 5.45 s (boot) | `0B:45:45:30:30:30:34:37:38:2D:30:30:..` = **annonce série "EE000478-00"** | broadcast d'identité |
+| 8.83 s | `80:12:14:28:A7` | **scan-réponse** |
+| 8.90 s + (toutes ~96 ms) | `80:..:29:00:10:..` (data 0x1000=idle) | **status-réponse** |
+
+### Comparaison byte-à-byte avec garage-can (CRC vérifiés, init 0xF3)
+- **Scan-réponse** `80:12:14:28:A7` → **identique** (CRC OK).
+- **Status-réponse** `80:..:29:00:10` → **identique** (CRC OK).
+- **Compteur** (scan `0x02`→reply `0x12`, scan `0x82`→`0x92`) → **identique** au vrai UAP1.
+- **Timing** réponse **3840 µs** → déjà calé (confirmé par le log émetteur `reply lat ~3840us`). Le `+0ms` vu côté oracle est un **artefact** (le maître martèle le scan `+34 identical` → la latence « depuis dernier scan » retombe à 0).
+
+### L'annonce série est-elle obligatoire ? → NON (vérifié sur stephan192)
+Le vrai UAP1 **diffuse son n° de série au boot**, mais l'émulateur de référence **[stephan192/hoermann_door](https://github.com/stephan192/hoermann_door)** (`pic16/hoermann.c`) **ne l'implémente PAS** : il ne fait que (a) lire les **broadcasts** `00:..:02:02` pour l'état porte/lumière, (b) répondre au **scan** (`0x01`), (c) répondre au **status_request** (`0x20`) avec la data commande (0x1004=impulse…). **Aucune trame d'annonce.** → l'annonce n'est **pas** nécessaire pour piloter.
+
+**Nos constantes + framing sont identiques à stephan192** : `CMD_SLAVE_SCAN=0x01`, `CMD_SLAVE_STATUS_REQUEST=0x20`, `CMD_SLAVE_STATUS_RESPONSE=0x29`, `UAP1_TYPE=0x14`, même construction des trames. **Le protocole n'est donc PAS en cause.**
+
+### Le vrai mur, isolé proprement
+Tout est byte-perfect (vs trace ET vs stephan192), timing calé (3840 µs), drive 5 V, et le **witness confirme notre réponse propre sur le bus** (`OUR-SCANRESP<<<`). **Pourtant le maître scanne 0x28 en boucle et n'escalade JAMAIS vers `status_request` (0x20)** — alors qu'un vrai UAP1/stephan192 l'est. Donc le blocage n'est ni le contenu, ni le timing mesuré côté oracle, ni l'annonce.
+
+**Hypothèses restantes (prochaine session) :**
+- **Le maître a déjà fini sa découverte** avant que garage-can ne réponde correctement → tenter un **power-cycle de l'opérateur** avec garage-can déjà actif.
+- Le device tiers `01:80` (interne opérateur) occupe peut-être le rôle commande.
+- **Acquis** : monitoring (broadcasts) **100 % fonctionnel** ; la commande tient à ce dernier détail d'escalade.
+
+### 🎯 HYPOTHÈSE N°1 (session 2026-06-11, via hgdo) : notre SYNC BREAK est 2× trop court
+
+Comparaison avec **[steff393/hgdo](https://github.com/steff393/hgdo)** (ESP8266 + SoftwareSerial, **qui pilote la porte**) :
+- **Le timing µs n'est PAS critique** : hgdo répond avec `TX_DELAY = 3 ms` via `millis()` (résolution **milliseconde**), envoyé depuis la loop Arduino (jitter ms) → ça marche. → **hypothèse « timing PIC au µs » RETIRÉE.** Notre 3840 µs précis est largement bon.
+- **La vraie différence = le sync break.** Mesuré au scope (trace UAP1, script) :
+
+  | source | break (niveau bas) | bits @19200 | marche ? |
+  |---|---|---|---|
+  | **vrai UAP1** (scanresp/statusresp) | **~920 µs** | **~18 bits** | réf |
+  | **hgdo** (`0x00` @ **9600 7N1**) | ~833 µs | ~16 bits | ✅ |
+  | **garage-can** (`0x00` @ **19200**, pas de baud-switch) | **~470 µs** | **~9 bits** | ❌ |
+
+  → **Notre break fait la moitié.** Le witness (composant tolérant) le décode, mais **le maître strict ne reconnaît pas le début de trame** → ne nous **frame/enregistre pas** → **scanne en boucle sans escalader.** Colle à tout le symptôme.
+
+**FIX à implémenter** : allonger le break à **~830-920 µs** (≈16-18 bits). Méthode hgdo : baud-switch à **9600** pour émettre le `0x00`, puis 19200 pour la trame (le commentaire `send_frame` « baud-switch = 40 ms » est à revérifier — hgdo le fait par trame). Alternative : tenir la ligne TX basse ~900 µs manuellement (GPIO) avant de rendre la main à l'UART. **C'est la piste n°1 pour débloquer la commande.**
+
+### ✅✅ RÉSOLU (2026-06-11) — LA COMMANDE MARCHE, LA PORTE S'OUVRE
+
+Fix appliqué dans `send_frame` : break émis en **`0x00` @ 9600 baud** (~937 µs bas ≈ 18 bits @19200) puis trame @ 19200 (`uart_set_baudrate` est bien rapide, le « 40 ms » était faux). **Résultat immédiat** :
+- le maître **escalade** : passe du scan martelé à des **`STATUS_REQ->us` (0x20) toutes les ~100 ms** → on est **enregistrés comme un vrai UAP1** ;
+- `impulse` → status-réponse `80:..:29:04:10` (data 0x1004) → **la porte s'ouvre.** 🚪✅
+
+**CAUSE RACINE FINALE de la commande = sync break 2× trop court.** Tout le reste (scanresp, statusresp, compteur, timing 3840 µs, drive 5 V) était déjà bon. Le maître exige un break ≈ vrai UAP1 (~920 µs) pour framer/enregistrer la réponse.
+
+> 🏆 **BILAN : émulateur UAP1 complet et fonctionnel** sur WeAct CAN485 (CA-IS2092A isolé) — monitoring (broadcasts) **ET** commande (impulse/open/close/light/venting/stop). Deux verrous levés cette session : (1) RX = swap physique A/B + `ab_inverted:true` (fail-safe du transceiver isolé), (2) commande = sync break allongé.
+
+---
+
 ## 6 bis. Pistes à tester en priorité dès la prochaine session
 
 Par ordre coût/bénéfice :
