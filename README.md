@@ -361,6 +361,10 @@ The master **scans** our address but **never escalates** to `status_request` (so
    `reply_delay_us: 3800`.
 3. `sniffer: true`: if you see **`STATUS_REQ->us`** frames, you're **registered** (win).
 4. Only one responder on address 0x28 (turn off any 2nd emulator / non-passive witness).
+5. **Isolated board (WeAct CAN485): check the switches — PUPD = OFF and 120 Ω = OFF.** A PUPD
+   (bias) switch left ON can leave **RX working but block the command**: it weakens the TX drive
+   just enough that the master never registers the reply. (Real case: same code/board, RX OK,
+   no command → the PUPD switch was ON.)
 
 ### Error 7 on the operator
 Error 7 means the operator gets no reply from the "slave" (UAP1). Check:

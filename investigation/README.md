@@ -95,8 +95,13 @@ is fast (plain register writes — the "40 ms" myth is false).
 - **µs-level timing is NOT critical.** `hgdo` (ESP8266 + SoftwareSerial) replies with a
   **millisecond** delay (`millis()`, `TX_DELAY = 3 ms`, ms jitter) and drives the door.
   No need for a dedicated MCU / cycle-precise timing. ~3.8 ms ±1 ms is enough.
-- **PUPD: leave it OFF.** The bias added by the board **disturbs the WHOLE bus** (even a passive
-  witness goes blind). The board's **120 Ω**, on the other hand, is **neutral on RX**.
+- **PUPD: leave it OFF.** The bias added by the board **disturbs the bus**. Its impact is a
+  **spectrum** depending on the bus/your position: sometimes it kills reception entirely (even a
+  passive witness goes blind); sometimes it leaves **RX working but silently blocks the command**
+  — it weakens our TX drive just enough that the master never registers our reply (state reads
+  fine, but no command). **Field case**: identical code/board, RX OK on both, one board couldn't
+  command → its PUPD switch was ON. So: **PUPD = OFF, full stop.** The board's **120 Ω** is
+  **neutral on RX** but also loads the TX drive — keep it OFF too on the Hörmann bus.
 - **Software inversion alone is not enough** on the isolated part: `ab_inverted` only inverts the
   UART **after** the chip. The chip's fail-safe acts on the **analog** side → you need the
   **physical swap**.
