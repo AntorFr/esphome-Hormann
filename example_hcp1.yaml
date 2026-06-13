@@ -1,10 +1,10 @@
-# Exemple générique — Hörmann HCP1 sur ESP32 + module RS485 NON-isolé (MAX485 / SP3485, avec DE).
-# Émulateur UAP1 : lecture d'état ET commande.
-# Pour la WeAct CAN485 (transceiver ISOLÉ), voir example_can485.yaml.
+# Generic example — Hörmann HCP1 on ESP32 + a NON-isolated RS485 module (MAX485 / SP3485, with DE).
+# UAP1 emulator: state read-out AND command.
+# For the WeAct CAN485 (ISOLATED transceiver), see example_can485.yaml.
 #
-# Câblage : A/B du module sur le bus (DATA+/DATA-). Si rien ne décode -> tester ab_inverted.
-# Un module avec DE (séparé, ou combiné sur un GPIO) est REQUIS pour COMMANDER : le composant
-# pilote DE pour émettre. Un module auto-direction sans DE ne peut que LIRE l'état.
+# Wiring: module A/B to the bus (DATA+/DATA-). If nothing decodes -> try ab_inverted.
+# A module with DE (separate, or tied together on one GPIO) is REQUIRED to COMMAND: the component
+# drives DE to transmit. An auto-direction module without DE can only READ the state.
 
 substitutions:
   name: hormann-garage
@@ -17,7 +17,7 @@ esphome:
 esp32:
   board: esp32dev
   framework:
-    type: esp-idf          # REQUIS par le composant hormann_hcp1
+    type: esp-idf          # REQUIRED by the hormann_hcp1 component
 
 wifi:
   ssid: !secret wifi_ssid
@@ -41,20 +41,21 @@ ota:
 
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/AntorFr/esphome-Hormann
+      ref: main
     components: [ hormann_hcp1 ]
 
 hormann_hcp1:
   id: hormann
   uart_num: 1
-  tx_pin: GPIO17       # DI du module RS485
-  rx_pin: GPIO16       # RO du module RS485
-  de_pin: GPIO4        # DE (actif-haut) — REQUIS pour émettre/commander
-  # re_pin: GPIO5      # si /RE est sur un GPIO séparé (sinon combiné / à GND)
-  ab_inverted: auto    # off | true | auto — auto-détecte la polarité A/B au boot
-  reply_delay_us: 3800 # latence de réponse calée sur un vrai UAP1 (~3.84 ms)
-  sniffer: false       # true = logger les trames du bus (debug)
+  tx_pin: GPIO17       # RS485 module DI
+  rx_pin: GPIO16       # RS485 module RO
+  de_pin: GPIO4        # DE (active-high) — REQUIRED to transmit/command
+  # re_pin: GPIO5      # if /RE is on a separate GPIO (otherwise tied together / to GND)
+  ab_inverted: auto    # off | true | auto — auto-detect A/B polarity at boot
+  reply_delay_us: 3800 # reply latency tuned to a real UAP1 (~3.84 ms)
+  sniffer: false       # true = log the bus frames (debug)
 
 cover:
   - platform: hormann_hcp1

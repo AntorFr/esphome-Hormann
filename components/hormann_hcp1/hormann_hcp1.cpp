@@ -405,10 +405,10 @@ void HormannHCP1Component::sniff_log_frame_(const uint8_t *frame, uint8_t length
   uint8_t cmd = plen >= 1 ? frame[2] : 0xFF;
   if (addr == BROADCAST_ADDR) {
     cat = "BCAST";
-    this->sniff_req_ms_ = 0;  // fin de rafale -> la prochaine mesure repart du 1er req
+    this->sniff_req_ms_ = 0;  // burst boundary -> next measurement starts from its first req
   } else if (addr == this->slave_addr_) {
-    // Le maître REMARTÈLE le même scan (+N identical) tant qu'il n'a pas notre réponse.
-    // On ne garde que l'instant du PREMIER req de la rafale -> latence réelle (sinon faussée ~0).
+    // The master HAMMERS the same scan (+N identical) until it gets our reply.
+    // Keep only the time of the FIRST request of the burst -> real latency (else skewed to ~0).
     if (cmd == CMD_SLAVE_SCAN) { cat = "SCAN->us"; if (this->sniff_req_ms_ == 0) this->sniff_req_ms_ = now; }
     else if (cmd == CMD_SLAVE_STATUS_REQUEST) { cat = "STATUS_REQ->us ***"; if (this->sniff_req_ms_ == 0) this->sniff_req_ms_ = now; }
     else { snprintf(catbuf, sizeof(catbuf), "->us cmd=0x%02X", cmd); cat = catbuf; }
@@ -424,7 +424,7 @@ void HormannHCP1Component::sniff_log_frame_(const uint8_t *frame, uint8_t length
       snprintf(catbuf, sizeof(catbuf), "%s +%ums", our_scanresp ? "OUR-SCANRESP<<<" : "OUR-STATUSRESP<<<",
                (unsigned) lat);
       cat = catbuf;
-      this->sniff_req_ms_ = 0;  // mesuré -> reset pour la prochaine rafale
+      this->sniff_req_ms_ = 0;  // measured -> reset for the next burst
     } else {
       cat = "->master";
     }
@@ -550,17 +550,17 @@ void HormannHCP1Component::send_frame(uint8_t length) {
   if (this->de_pin_ != nullptr) this->de_pin_->digital_write(!this->de_invert_);
   esp_rom_delay_us(20);  // allow the line to settle
 
-  // Sync break: un vrai UAP1 tient la ligne basse ~920 µs (~18 bits @19200) avant la trame.
-  // Notre ancien "0x00 @19200" ne faisait que ~470 µs (~9 bits) -> TROP COURT : le maître ne
-  // framait pas notre réponse -> jamais enregistré -> pas d'escalade (cf. INVESTIGATION §4undecies,
-  // mesuré via trace UAP1 + hgdo). Fix (comme hgdo) : émettre le 0x00 à MOITIÉ baud (9600) =
-  // ~937 µs bas (~18 bits @19200), puis repasser à 19200 pour la trame.
-  // uart_set_baudrate = simples écritures registre (le "40 ms" de l'ancien commentaire était faux).
+  // Sync break: a real UAP1 holds the line low ~920 µs (~18 bits @19200) before the frame.
+  // Our old "0x00 @19200" was only ~470 µs (~9 bits) -> TOO SHORT: the master didn't frame our
+  // reply -> never registered -> no escalation (cf. INVESTIGATION §4undecies, measured via a
+  // UAP1 trace + hgdo). Fix (like hgdo): emit the 0x00 at HALF baud (9600) = ~937 µs low
+  // (~18 bits @19200), then switch back to 19200 for the frame.
+  // uart_set_baudrate = plain register writes (the old comment's "40 ms" was false).
   uint8_t brk = 0x00;
   uart_set_baudrate(port, 9600);
   uart_write_bytes(port, &brk, 1);
   uart_wait_tx_done(port, pdMS_TO_TICKS(20));
-  esp_rom_delay_us(150);                       // laisse le 0x00 finir de sortir @9600 avant re-baud
+  esp_rom_delay_us(150);                       // let the 0x00 finish shifting out @9600 before re-baud
   uart_set_baudrate(port, 19200);
   uart_write_bytes(port, this->tx_buffer_, length);
   uart_wait_tx_done(port, pdMS_TO_TICKS(20));

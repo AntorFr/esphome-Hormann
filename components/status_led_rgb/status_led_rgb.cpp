@@ -9,23 +9,23 @@ namespace status_led_rgb {
 static const char *const TAG = "status_led_rgb";
 
 void StatusLEDRGB::loop() {
-  // Mêmes bits que le `status_led` natif : STATUS_LED_OK / _WARNING / _ERROR.
+  // Same bits as the native `status_led`: STATUS_LED_OK / _WARNING / _ERROR.
   uint8_t state = App.get_app_state() & STATUS_LED_MASK;
 
   bool on;
   StatusColor color;
   if ((state & STATUS_LED_ERROR) != 0u) {
     color = this->error_;
-    on = millis() % 250u < 150u;    // clignotement rapide (cf. status_led natif)
+    on = millis() % 250u < 150u;    // fast blink (cf. native status_led)
   } else if ((state & STATUS_LED_WARNING) != 0u) {
     color = this->warning_;
-    on = millis() % 1500u < 250u;   // clignotement lent
+    on = millis() % 1500u < 250u;   // slow blink
   } else {
     color = this->ok_;
-    on = true;                      // fixe quand tout va bien
+    on = true;                      // solid when everything is fine
   }
 
-  // Ne repousser à la LED que si l'affichage change réellement.
+  // Only push to the LED if the displayed state actually changes.
   if (!this->initialized_ || on != this->last_on_ || color.r != this->last_color_.r ||
       color.g != this->last_color_.g || color.b != this->last_color_.b) {
     this->apply_(color, on);

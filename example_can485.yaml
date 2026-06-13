@@ -1,13 +1,13 @@
-# Exemple VALIDÉ — Hörmann HCP1 sur WeAct CAN485 DevBoard (transceiver RS485 ISOLÉ CA-IS2092A).
-# Émulateur UAP1 complet : lecture d'état ET commande (impulse / open / close / light / venting / stop).
+# VALIDATED example — Hörmann HCP1 on a WeAct CAN485 DevBoard (ISOLATED RS485 transceiver CA-IS2092A).
+# Full UAP1 emulator: state read-out AND command (impulse / open / close / light / venting / stop).
 #
-# ⚠️ CÂBLAGE BUS -> CARTE (A et B INVERSÉS physiquement, cf. ab_inverted) :
-#     bus pin 6  DATA+  ->  borne RS485  B-
-#     bus pin 5  DATA-  ->  borne RS485  A+
-#     bus pin 3  GND    ->  borne RS485  GND (Mass)
-#   Switches carte : PUPD = OFF, terminaison 120 Ω = OFF (le maître biaise/termine déjà).
-#   Pourquoi l'inversion : le fail-safe du transceiver isolé lit le bus Hörmann (qui drive
-#   asymétrique) comme idle -> inverser A/B le réveille. Détails : investigation/README.md
+# ⚠️ BUS -> BOARD WIRING (A and B physically SWAPPED, see ab_inverted):
+#     bus pin 6  DATA+  ->  RS485 terminal  B-
+#     bus pin 5  DATA-  ->  RS485 terminal  A+
+#     bus pin 3  GND    ->  RS485 terminal  GND (Mass)
+#   Board switches: PUPD = OFF, 120 Ω termination = OFF (the master already biases/terminates).
+#   Why the swap: the isolated transceiver's fail-safe reads the Hörmann bus (which drives
+#   asymmetrically) as idle -> swapping A/B wakes it up. Details: investigation/README.md
 
 substitutions:
   name: hormann-can485
@@ -20,7 +20,7 @@ esphome:
 esp32:
   board: esp32dev
   framework:
-    type: esp-idf          # REQUIS par le composant hormann_hcp1
+    type: esp-idf          # REQUIRED by the hormann_hcp1 component
 
 wifi:
   ssid: !secret wifi_ssid
@@ -44,8 +44,9 @@ ota:
 
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/AntorFr/esphome-Hormann
+      ref: main
     components: [ hormann_hcp1, status_led_rgb ]
 
 hormann_hcp1:
@@ -53,13 +54,13 @@ hormann_hcp1:
   uart_num: 1
   tx_pin: GPIO22       # DI
   rx_pin: GPIO21       # RO
-  de_pin: GPIO17       # DE (actif-haut)
-  ab_inverted: true    # A/B inversés physiquement -> ré-inversion logicielle RX+TX
-  reply_delay_us: 3800 # latence de réponse calée sur un vrai UAP1 (~3.84 ms)
-  sniffer: false       # true = logger les trames du bus (debug)
+  de_pin: GPIO17       # DE (active-high)
+  ab_inverted: true    # A/B physically swapped -> software re-inversion RX+TX
+  reply_delay_us: 3800 # reply latency tuned to a real UAP1 (~3.84 ms)
+  sniffer: false       # true = log the bus frames (debug)
 
 light:
-  # WS2812 onboard (GPIO4) -> indicateur d'état via status_led_rgb (vert=OK/orange=warn/rouge=err)
+  # Onboard WS2812 (GPIO4) -> status indicator via status_led_rgb (green=OK / orange=warn / red=err)
   - platform: esp32_rmt_led_strip
     id: status_strip
     internal: true

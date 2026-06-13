@@ -3,11 +3,11 @@ import esphome.config_validation as cv
 from esphome.components import light
 from esphome.const import CONF_BRIGHTNESS, CONF_ID
 
-# Indicateur d'état type `status_led` mais pour une LED ADRESSABLE (WS2812).
-# Le core ESPHome ne fournit que `status_led` (GPIO on/off) — rien pour une
-# LED couleur. Ce composant lit App.get_app_state() (mêmes bits que le
-# `status_led` natif) et pilote une light adressable existante en couleur :
-#   OK -> fixe, WARNING -> clignotement lent, ERROR -> clignotement rapide.
+# A `status_led`-style status indicator, but for an ADDRESSABLE LED (WS2812).
+# ESPHome core only provides `status_led` (GPIO on/off) — nothing for a color
+# LED. This component reads App.get_app_state() (same bits as the native
+# `status_led`) and drives an existing addressable light in color:
+#   OK -> solid, WARNING -> slow blink, ERROR -> fast blink.
 
 DEPENDENCIES = ['light']
 MULTI_CONF = True
@@ -22,7 +22,7 @@ StatusLEDRGB = status_led_rgb_ns.class_('StatusLEDRGB', cg.Component)
 
 
 def color(value):
-    """Une couleur = liste [R, G, B] avec chaque canal 0-255."""
+    """A color = list [R, G, B], each channel 0-255."""
     value = cv.All(
         cv.ensure_list(cv.int_range(min=0, max=255)),
         cv.Length(min=3, max=3),
@@ -32,11 +32,11 @@ def color(value):
 
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(StatusLEDRGB),
-    # La light adressable (ex: esp32_rmt_led_strip) à piloter.
+    # The addressable light (e.g. esp32_rmt_led_strip) to drive.
     cv.Required(CONF_LIGHT_ID): cv.use_id(light.LightState),
-    cv.Optional(CONF_OK_COLOR, default=[0, 255, 0]): color,        # vert
+    cv.Optional(CONF_OK_COLOR, default=[0, 255, 0]): color,        # green
     cv.Optional(CONF_WARNING_COLOR, default=[255, 130, 0]): color,  # orange
-    cv.Optional(CONF_ERROR_COLOR, default=[255, 0, 0]): color,      # rouge
+    cv.Optional(CONF_ERROR_COLOR, default=[255, 0, 0]): color,      # red
     cv.Optional(CONF_BRIGHTNESS, default='30%'): cv.percentage,
 }).extend(cv.COMPONENT_SCHEMA)
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Décode l'UART Hörmann (19200 8N1) depuis l'export Saleae brut.
-Fusionne les 2 canaux (TX + RX) en une seule timeline = le bus complet
-(maître + UAP1), regroupe en trames et affiche la séquence + le timing.
+"""Decode the Hörmann UART (19200 8N1) from a raw Saleae export.
+TX is the clean (idle-high) data line; RX is the idle-low complementary half.
+Decode each channel into Hörmann frames, with timing and break durations.
 
-Usage: python3 decode_uart.py [chemin.csv]   (défaut: UAP1-startup.csv à côté)"""
+Usage: python3 decode_uart.py [path.csv]   (default: UAP1-startup.csv next to this file)"""
 import csv, os, sys
 
 BAUD = 19200
 BIT = 1.0 / BAUD                 # 52.083 µs
-FRAME_GAP = 0.003                # 3 ms -> nouvelle trame
+FRAME_GAP = 0.003                # 3 ms -> new frame
 
 
 def load(path):
@@ -24,8 +24,8 @@ def load(path):
 
 
 def decode_channel(rows, idx, invert=False):
-    """Décode un canal (idx=1 TX, 2 RX). Idle=1, start bit = front descendant.
-    invert=True pour une ligne idle-bas (différentielle inverse) : on inverse le niveau."""
+    """Decode one channel (idx=1 TX, 2 RX). Idle=1, start bit = falling edge.
+    invert=True for an idle-low line (inverted differential half): flip the level."""
     ts = [r[0] for r in rows]
     vs = [(1 - r[idx]) if invert else r[idx] for r in rows]
     n = len(ts)
@@ -45,10 +45,10 @@ def decode_channel(rows, idx, invert=False):
     while k < n:
         if ts[k] < guard:
             k += 1; continue
-        if vs[k - 1] == 1 and vs[k] == 0:          # front descendant = start bit
+        if vs[k - 1] == 1 and vs[k] == 0:          # falling edge = start bit
             st = ts[k]; val = 0; ok = True
             for b in range(8):
-                tb = st + (1.5 + b) * BIT           # milieu du bit de donnée b (LSB first)
+                tb = st + (1.5 + b) * BIT           # middle of data bit b (LSB first)
                 if tb > tend:
                     ok = False; break
                 val |= (level_at(tb) << b)
@@ -57,17 +57,6 @@ def decode_channel(rows, idx, invert=False):
                 guard = st + 9.5 * BIT
         k += 1
     return out
-
-
-def merge(rows):
-    """Fusionne TX (idle-haut) + RX (idle-bas -> inversé) en une timeline du bus complet."""
-    allb = sorted(decode_channel(rows, 1) + decode_channel(rows, 2, invert=True))
-    merged = []
-    for st, v in allb:
-        if merged and abs(st - merged[-1][0]) < BIT * 0.4 and v == merged[-1][1]:
-            continue
-        merged.append((st, v))
-    return merged
 
 
 def group(bytestream, gap=FRAME_GAP):
@@ -84,7 +73,7 @@ def group(bytestream, gap=FRAME_GAP):
 
 
 def classify(hexs):
-    """Petite étiquette lisible selon le 1er octet utile (après le break 0x00)."""
+    """Short readable label based on the first useful byte (after the 0x00 break)."""
     b = hexs[1:] if hexs and hexs[0] == 0x00 else hexs
     if not b:
         return ""
@@ -108,7 +97,7 @@ def classify(hexs):
 
 def show(title, bytestream):
     fr = group(bytestream)
-    print(f"\n===== {title} : {len(fr)} trames =====")
+    print(f"\n===== {title} : {len(fr)} frames =====")
     prev_end = None
     for f in fr:
         t0 = f[0][0]
@@ -123,11 +112,11 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "UAP1-startup.csv")
     rows = load(path)
-    # TX = ce que l'UAP1 ÉMET (annonce + scanresp + statusresp). Propre, idle-haut.
-    show("TX (UAP1 émet)", decode_channel(rows, 1))
-    # RX = ce que l'UAP1 REÇOIT (= le maître émet : scans, status_request, broadcasts).
-    # idle-bas -> inversé.
-    show("RX (maître émet)", decode_channel(rows, 2, invert=True))
+    # TX = what the UAP1 TRANSMITS (announce + scanresp + statusresp). Clean, idle-high.
+    show("TX (UAP1 transmits)", decode_channel(rows, 1))
+    # RX = what the UAP1 RECEIVES (= the master transmits: scans, status_request, broadcasts).
+    # idle-low -> inverted.
+    show("RX (master transmits)", decode_channel(rows, 2, invert=True))
 
 
 if __name__ == '__main__':

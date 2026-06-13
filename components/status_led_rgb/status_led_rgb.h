@@ -10,8 +10,8 @@ struct StatusColor {
   uint8_t r, g, b;
 };
 
-/// Réplique le comportement du `status_led` natif (lecture de App.get_app_state())
-/// mais pilote une light ADRESSABLE en couleur au lieu d'un GPIO on/off.
+/// Replicates the native `status_led` behavior (reading App.get_app_state())
+/// but drives an ADDRESSABLE light in color instead of a GPIO on/off.
 class StatusLEDRGB : public Component {
  public:
   void set_light(light::LightState *light) { this->light_ = light; }
@@ -22,7 +22,7 @@ class StatusLEDRGB : public Component {
 
   void loop() override;
   void dump_config() override;
-  // Tourne après l'init de la light pour que make_call() soit valide.
+  // Run after the light is set up so make_call() is valid.
   float get_setup_priority() const override { return setup_priority::LATE; }
 
  protected:
@@ -34,7 +34,7 @@ class StatusLEDRGB : public Component {
   StatusColor error_{255, 0, 0};
   float brightness_{0.3f};
 
-  // Mémorise ce qui est affiché pour ne repousser à la LED que sur changement.
+  // Remember what is displayed so we only push to the LED on change.
   bool last_on_{false};
   StatusColor last_color_{0, 0, 0};
   bool initialized_{false};
