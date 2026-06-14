@@ -149,6 +149,14 @@ void HormannHCP1Component::loop() {
     this->state_callback_.call();
   }
 
+  // Registration edge (operator polling us with status_request) -> refresh the binary_sensor.
+  // Re-evaluated here (not only on door-state change) so the 2 s timeout flips it back to OFF.
+  bool reg = this->is_registered();
+  if (reg != this->last_registered_) {
+    this->last_registered_ = reg;
+    this->state_callback_.call();
+  }
+
   // Boot-time RX polarity auto-detection (rx_inverted: auto).
   if (this->polarity_state_ != POLARITY_DONE) {
     uint32_t now = millis();
@@ -513,6 +521,7 @@ void HormannHCP1Component::process_slave_scan(uint8_t counter) {
 }
 
 void HormannHCP1Component::process_status_request(uint8_t counter) {
+  this->last_status_req_ms_ = millis();  // operator is polling us -> we are registered
   if (this->auto_scan_ && !this->combo_locked_) {
     this->combo_locked_ = true;
     ESP_LOGW(TAG, "*** WORKING COMBO: slave=0x%02X master=0x%02X type=0x%02X ***",
@@ -578,6 +587,12 @@ void HormannHCP1Component::send_frame(uint8_t length) {
 }
 
 void HormannHCP1Component::trigger_action(HormannAction action) {
+  // The operator must poll us (status_request) for a command to be delivered. Until then the
+  // reply goes nowhere -> no-op + warn instead of silently failing.
+  if (!this->is_registered()) {
+    ESP_LOGW(TAG, "Not registered by the operator yet — command ignored");
+    return;
+  }
   switch (action) {
     case ACTION_STOP:
       if (this->door_state_.cover == COVER_OPENING || this->door_state_.cover == COVER_CLOSING)

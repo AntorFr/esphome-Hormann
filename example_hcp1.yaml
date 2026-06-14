@@ -81,6 +81,8 @@ binary_sensor:
       name: "Venting Position"
     prewarn:
       name: "Pre-warning"
+    registered:
+      name: "Registered"        # ON = the operator polls us (status_request) -> commands work
 
 button:
   - platform: hormann_hcp1

@@ -12,6 +12,7 @@ enum SensorType {
   SENSOR_ERROR = 1,
   SENSOR_VENTING = 2,
   SENSOR_PREWARN = 3,
+  SENSOR_REGISTERED = 4,  // operator has registered us (polls status_request) -> commands work
 };
 
 class HormannBinarySensor : public binary_sensor::BinarySensor, public Component {

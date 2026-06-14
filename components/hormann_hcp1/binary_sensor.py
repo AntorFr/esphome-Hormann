@@ -6,6 +6,7 @@ from esphome.const import (
     DEVICE_CLASS_LIGHT,
     DEVICE_CLASS_PROBLEM,
     DEVICE_CLASS_MOVING,
+    DEVICE_CLASS_CONNECTIVITY,
 )
 
 from . import hormann_hcp1_ns, HormannHCP1Component, CONF_HORMANN_HCP1_ID
@@ -16,6 +17,7 @@ CONF_LIGHT = 'light'
 CONF_ERROR = 'error'
 CONF_VENTING = 'venting'
 CONF_PREWARN = 'prewarn'
+CONF_REGISTERED = 'registered'
 
 HormannBinarySensor = hormann_hcp1_ns.class_('HormannBinarySensor', binary_sensor.BinarySensor, cg.Component)
 
@@ -35,6 +37,10 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_PREWARN): binary_sensor.binary_sensor_schema(
         HormannBinarySensor,
         device_class=DEVICE_CLASS_MOVING,
+    ),
+    cv.Optional(CONF_REGISTERED): binary_sensor.binary_sensor_schema(
+        HormannBinarySensor,
+        device_class=DEVICE_CLASS_CONNECTIVITY,
     ),
 })
 
@@ -69,3 +75,10 @@ async def to_code(config):
         await cg.register_component(var, conf)
         cg.add(var.set_parent(parent))
         cg.add(var.set_sensor_type(3))  # 3 = prewarn
+
+    if CONF_REGISTERED in config:
+        conf = config[CONF_REGISTERED]
+        var = await binary_sensor.new_binary_sensor(conf)
+        await cg.register_component(var, conf)
+        cg.add(var.set_parent(parent))
+        cg.add(var.set_sensor_type(4))  # 4 = registered

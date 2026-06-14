@@ -68,6 +68,8 @@ binary_sensor:
       name: "Venting Position"
     prewarn:
       name: "Pre-warning"
+    registered:
+      name: "Registered"
 
 # Action buttons
 button:

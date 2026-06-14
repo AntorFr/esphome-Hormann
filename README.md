@@ -303,6 +303,9 @@ Once configured, the following entities are exposed in Home Assistant:
 - **Error** — error indicator
 - **Venting Position** — venting position (door slightly open)
 - **Pre-warning** — pre-warning before movement
+- **Registered** (connectivity) — ON when the operator polls us (`status_request`) i.e. we're
+  registered and **commands work**. While OFF, command actions are ignored (with a WARN log) —
+  use it in HA to gate/hide the controls.
 
 ### Buttons
 - **Impulse** — impulse (like the remote)

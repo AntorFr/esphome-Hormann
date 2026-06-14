@@ -104,6 +104,13 @@ class HormannHCP1Component : public Component {
   DoorState get_door_state() const { return this->door_state_; }
   bool is_data_valid() const { return this->door_state_.data_valid; }
 
+  // "Registered": the operator polls us with status_request (cmd 0x20). When registered it
+  // polls ~every 100 ms, so "no status_request for 2 s" = not registered. Commands only work
+  // while registered (the response data is delivered inside a status_response).
+  bool is_registered() const {
+    return this->last_status_req_ms_ != 0 && (millis() - this->last_status_req_ms_) < 2000;
+  }
+
   void trigger_action(HormannAction action);
   void open_door() { trigger_action(ACTION_OPEN); }
   void close_door() { trigger_action(ACTION_CLOSE); }
@@ -130,6 +137,8 @@ class HormannHCP1Component : public Component {
   bool de_invert_{false};
   uint32_t reply_delay_us_{0};       // micro-delay before TX (eager-reply window tuning)
   volatile int64_t last_rx_us_{0};   // timestamp of last received byte (reply-latency instr.)
+  volatile uint32_t last_status_req_ms_{0};  // last status_request from the operator (registration)
+  bool last_registered_{false};              // edge detection for the "registered" binary_sensor
 
   // Line polarity / boot-time auto-detection
   uint8_t ab_inverted_mode_{AB_INV_AUTO};   // AbInvertMode

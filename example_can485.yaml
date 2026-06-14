@@ -5,7 +5,7 @@
 #     bus pin 6  DATA+  ->  RS485 terminal  B-
 #     bus pin 5  DATA-  ->  RS485 terminal  A+
 #     bus pin 3  GND    ->  RS485 terminal  GND (Mass)
-#   Board switches: PUPD = OFF, 120 Ω termination = OFF (the master already biases/terminates).
+#   Board switches: PUPD = OFF, 120 Ω termination = ON (but OFF is working as well).
 #   Why the swap: the isolated transceiver's fail-safe reads the Hörmann bus (which drives
 #   asymmetrically) as idle -> swapping A/B wakes it up. Details: investigation/README.md
 
@@ -96,6 +96,8 @@ binary_sensor:
       name: "Venting Position"
     prewarn:
       name: "Pre-warning"
+    registered:
+      name: "Registered"        # ON = the operator polls us (status_request) -> commands work
 
 button:
   - platform: hormann_hcp1
